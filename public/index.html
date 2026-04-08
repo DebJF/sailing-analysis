@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sailing Analysis</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────────────── -->
+  <header id="header">
+    <h1>⛵ Sailing Analysis</h1>
+    <label class="upload-btn" title="Upload Expedition CSV log files">
+      + Upload Files
+      <input type="file" id="file-input" multiple accept=".csv">
+    </label>
+  </header>
+
+  <!-- ── Main ────────────────────────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- Map -->
+    <div id="map-container">
+      <div id="map"></div>
+      <div id="empty-overlay">
+        <div class="empty-message">
+          <span class="icon">⚓</span>
+          <p>Upload Expedition log files to begin</p>
+          <p style="font-size:12px;margin-top:8px;opacity:0.6">Drag &amp; drop CSV files onto the map, or use the button above</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+
+      <div class="sidebar-section">
+        <h2>Variables</h2>
+        <div id="variable-list"></div>
+        <select id="add-var-select">
+          <option value="">+ Add variable</option>
+        </select>
+      </div>
+
+      <div class="sidebar-section">
+        <h2>Boats</h2>
+        <div id="boat-list"></div>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- ── Footer controls ─────────────────────────────────────────────────────── -->
+  <footer id="controls">
+
+    <div class="trim-controls">
+      <button id="btn-trim-start" title="Set trim start to current position">Set Start</button>
+      <button id="btn-trim-end"   title="Set trim end to current position">Set End</button>
+      <button id="btn-clear-trim" title="Clear trim — show full track">Clear</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="playback-controls">
+      <button id="btn-rewind" title="Jump to start">⏮</button>
+      <button id="btn-play"   title="Play / Pause">▶</button>
+      <button id="btn-ff"     title="Jump to end">⏭</button>
+      <input  id="scrubber" type="range" min="0" max="1000" value="0" step="1">
+      <select id="speed-select" title="Playback speed"></select>
+      <span   id="time-display">--:--:-- UTC</span>
+    </div>
+
+  </footer>
+
+  <!-- ── Boat name modal ──────────────────────────────────────────────────────── -->
+  <div id="name-modal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <h3>Name this boat</h3>
+      <div id="modal-filename" class="modal-filename"></div>
+      <input type="text" id="boat-name-input" placeholder="Enter boat name…" autocomplete="off">
+      <button id="btn-modal-ok">Add Boat</button>
+    </div>
+  </div>
+
+  <!-- ── Scripts ──────────────────────────────────────────────────────────────── -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/parser.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/playback.js"></script>
+  <script src="/js/app.js"></script>
+
+</body>
+</html>

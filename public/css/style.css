@@ -1,0 +1,422 @@
+/* ── Reset & base ────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0f1923;
+  --panel:    #1a2b3c;
+  --panel2:   #152231;
+  --border:   #243d52;
+  --text:     #e0eef7;
+  --muted:    #7fb3cc;
+  --accent:   #1e88e5;
+  --danger:   #e53935;
+  --success:  #43a047;
+  --header-h: 48px;
+  --footer-h: 60px;
+  --sidebar-w: 290px;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: var(--panel2);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+button:hover { background: var(--border); }
+
+select {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────────── */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+#header {
+  height: var(--header-h);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 16px;
+  flex-shrink: 0;
+  z-index: 1000;
+}
+
+#header h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #c8e6f5;
+  flex: 1;
+}
+
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.upload-btn:hover { background: #1565c0; }
+.upload-btn input { display: none; }
+
+/* Main area */
+#main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Map */
+#map-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+}
+
+/* Empty state overlay */
+#empty-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 25, 35, 0.82);
+  z-index: 500;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+#empty-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.empty-message {
+  text-align: center;
+  color: var(--muted);
+}
+.empty-message .icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+.empty-message p {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* Drag-over highlight */
+#map-container.drag-over::after {
+  content: 'Drop CSV files here';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(30, 136, 229, 0.12);
+  border: 3px dashed var(--accent);
+  z-index: 600;
+  pointer-events: none;
+}
+
+/* Sidebar */
+#sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-section:last-child { border-bottom: none; flex: 1; }
+
+.sidebar-section h2 {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+/* Variables panel */
+#variable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.var-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 22px;
+}
+
+.var-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.var-name {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 52px;
+  flex-shrink: 0;
+}
+
+.var-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+
+.var-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+.var-num {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+#add-var-select {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* Boats panel */
+#boat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.boat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--panel2);
+  border-radius: 5px;
+}
+
+.boat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.boat-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.btn-remove-boat {
+  background: transparent;
+  color: var(--muted);
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 3px;
+}
+.btn-remove-boat:hover { color: var(--danger); background: transparent; }
+
+/* ── Footer / controls ───────────────────────────────────────────────────────── */
+#controls {
+  height: var(--footer-h);
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.trim-controls {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.trim-controls button {
+  font-size: 11px;
+  padding: 4px 9px;
+  color: var(--muted);
+}
+#btn-trim-start:hover { color: var(--success); }
+#btn-trim-end:hover   { color: var(--danger); }
+
+.sep {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.playback-controls button {
+  font-size: 16px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+
+#btn-play {
+  min-width: 36px;
+  font-size: 18px;
+  background: var(--accent);
+  color: #fff;
+}
+#btn-play:hover { background: #1565c0; }
+
+#scrubber {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+}
+
+#speed-select {
+  flex-shrink: 0;
+  min-width: 52px;
+}
+
+#time-display {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 80px;
+  text-align: right;
+}
+
+/* ── Name modal ──────────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.modal-backdrop.hidden { display: none; }
+
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px 28px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-box h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.modal-box .modal-filename {
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.modal-box input[type="text"] {
+  width: 100%;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.modal-box input[type="text"]:focus { border-color: var(--accent); }
+
+.modal-box button {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.modal-box button:hover { background: #1565c0; }
