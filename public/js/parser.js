@@ -28,14 +28,15 @@ const Parser = (() => {
       }
     }
 
-    // Lat/Lon candidate field IDs in priority order
-    // The actual data in these log files uses Mk Lat (161) / Mk Lon (162) for GPS positions
-    const latCandidates = [...new Set([
-      nameToId['Lat'], nameToId['Mk Lat'], 48, 161,
-    ].filter(v => v !== undefined))];
-    const lonCandidates = [...new Set([
-      nameToId['Lon'], nameToId['Mk Lon'], 49, 162,
-    ].filter(v => v !== undefined))];
+    // Pick ONE consistent lat/lon field ID for the whole file to avoid mixing
+    // boat GPS position with mark/waypoint position across rows.
+    // Priority: named 'Lat'/'Lon' first, then 'Mk Lat'/'Mk Lon', then hardcoded fallbacks.
+    const latId = nameToId['Lat'] !== undefined ? nameToId['Lat']
+                : nameToId['Mk Lat'] !== undefined ? nameToId['Mk Lat']
+                : 48;
+    const lonId = nameToId['Lon'] !== undefined ? nameToId['Lon']
+                : nameToId['Mk Lon'] !== undefined ? nameToId['Mk Lon']
+                : 49;
 
     const rows = [];
 
@@ -61,12 +62,11 @@ const Parser = (() => {
         }
       }
 
-      // Resolve lat/lon using candidate IDs
-      let lat, lon;
-      for (const id of latCandidates) { if (fields[id] !== undefined) { lat = fields[id]; break; } }
-      for (const id of lonCandidates) { if (fields[id] !== undefined) { lon = fields[id]; break; } }
+      // Resolve lat/lon using the single consistent field IDs
+      const lat = fields[latId];
+      const lon = fields[lonId];
 
-      const row = { ts, fields };
+      const row = { ts, fields, boatId: cols[0].trim() };
       if (lat !== undefined && lon !== undefined) {
         row.lat = lat;
         row.lon = lon;
@@ -75,7 +75,21 @@ const Parser = (() => {
     }
 
     rows.sort((a, b) => a.ts - b.ts);
-    const gpsRows = rows.filter(r => r.lat !== undefined);
+
+    // In Expedition CSV, boatId '0' is always the own (primary) boat.
+    // Other IDs are fleet/AIS contacts logged alongside — exclude their GPS positions.
+    const rawGpsRows = rows.filter(r => r.lat !== undefined && r.boatId === '0');
+
+    // Remove isolated GPS spikes: a point where BOTH the jump from the previous
+    // AND the jump to the next exceed a threshold is physically impossible at boat
+    // speeds and is a bad fix (e.g. sign-bit flip, momentary receiver glitch).
+    const SPIKE_DEG = 0.05; // ~5 km — well above any real 1-second movement
+    const gpsRows = rawGpsRows.filter((r, i, a) => {
+      if (i === 0 || i === a.length - 1) return true;
+      const d1 = Math.abs(r.lat - a[i-1].lat) + Math.abs(r.lon - a[i-1].lon);
+      const d2 = Math.abs(r.lat - a[i+1].lat) + Math.abs(r.lon - a[i+1].lon);
+      return !(d1 > SPIKE_DEG && d2 > SPIKE_DEG);
+    });
 
     const color = BOAT_COLORS[colorIndex % BOAT_COLORS.length];
     colorIndex++;

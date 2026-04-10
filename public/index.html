@@ -12,6 +12,11 @@
   <!-- ── Header ──────────────────────────────────────────────────────────────── -->
   <header id="header">
     <h1>⛵ Sailing Analysis</h1>
+    <nav class="view-tabs">
+      <button id="tab-map"     class="tab-btn active">Map</button>
+      <button id="tab-beating" class="tab-btn">Beating</button>
+      <button id="tab-twd"     class="tab-btn">TWD</button>
+    </nav>
     <label class="upload-btn" title="Upload Expedition CSV log files">
       + Upload Files
       <input type="file" id="file-input" multiple accept=".csv">
@@ -31,6 +36,16 @@
           <p style="font-size:12px;margin-top:8px;opacity:0.6">Drag &amp; drop CSV files onto the map, or use the button above</p>
         </div>
       </div>
+    </div>
+
+    <!-- Analysis (Beating) -->
+    <div id="analysis-container" class="view-hidden">
+      <canvas id="scatter-canvas"></canvas>
+    </div>
+
+    <!-- Analysis (TWD) -->
+    <div id="twd-container" class="view-hidden">
+      <div id="twd-content"></div>
     </div>
 
     <!-- Sidebar -->
@@ -63,6 +78,21 @@
 
     <div class="sep"></div>
 
+    <button id="btn-tack-color" title="Colour track by tack: port=red, starboard=green">Tack</button>
+
+    <div class="sep"></div>
+
+    <button id="btn-wind" title="Show wind barbs along track">Wind</button>
+    <select id="wind-interval" class="hidden-control" title="Wind barb interval">
+      <option value="300000">5 min</option>
+      <option value="600000" selected>10 min</option>
+      <option value="1800000">30 min</option>
+      <option value="3600000">1 hr</option>
+      <option value="7200000">2 hr</option>
+    </select>
+
+    <div class="sep"></div>
+
     <div class="playback-controls">
       <button id="btn-rewind" title="Jump to start">⏮</button>
       <button id="btn-play"   title="Play / Pause">▶</button>
@@ -89,6 +119,7 @@
   <script src="/js/parser.js"></script>
   <script src="/js/map.js"></script>
   <script src="/js/playback.js"></script>
+  <script src="/js/analysis.js"></script>
   <script src="/js/app.js"></script>
 
 </body>
