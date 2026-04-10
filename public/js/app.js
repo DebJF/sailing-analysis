@@ -23,6 +23,16 @@ const App = (() => {
   // All field names seen across all uploaded boats (name → fieldId in first boat that has it)
   const allFieldNames = new Map();
 
+  // Active view: 'map' | 'beating'
+  let currentView = 'map';
+
+  // Whether track is coloured by tack
+  let tackColorMode = false;
+
+  // Wind barbs
+  let windBarbsVisible = false;
+  let windInterval = 10 * 60 * 1000; // 10 minutes in ms
+
   // File queue for sequential name-prompt flow
   let fileQueue = [];
 
@@ -30,7 +40,8 @@ const App = (() => {
 
   let elEmptyOverlay, elVarList, elAddVarSelect, elBoatList,
       elBtnPlay, elBtnRewind, elBtnFF,
-      elBtnTrimStart, elBtnTrimEnd, elBtnClearTrim,
+      elBtnTrimStart, elBtnTrimEnd, elBtnClearTrim, elBtnTackColor,
+      elBtnWind, elWindInterval,
       elScrubber, elSpeedSelect, elTimeDisplay,
       elModal, elModalFilename, elBoatNameInput, elBtnModalOk;
 
@@ -51,12 +62,21 @@ const App = (() => {
     elScrubber      = document.getElementById('scrubber');
     elSpeedSelect   = document.getElementById('speed-select');
     elTimeDisplay   = document.getElementById('time-display');
+    elBtnTackColor  = document.getElementById('btn-tack-color');
+    elBtnWind       = document.getElementById('btn-wind');
+    elWindInterval  = document.getElementById('wind-interval');
     elModal         = document.getElementById('name-modal');
     elModalFilename = document.getElementById('modal-filename');
     elBoatNameInput = document.getElementById('boat-name-input');
     elBtnModalOk    = document.getElementById('btn-modal-ok');
 
     MapManager.init();
+    Analysis.init();
+
+    // View tabs
+    document.getElementById('tab-map').addEventListener('click', () => switchView('map'));
+    document.getElementById('tab-beating').addEventListener('click', () => switchView('beating'));
+    document.getElementById('tab-twd').addEventListener('click', () => switchView('twd'));
 
     // Populate speed selector
     Playback.SPEEDS.forEach(s => {
@@ -119,6 +139,32 @@ const App = (() => {
       elAddVarSelect.value = '';
     });
 
+    // Wind barbs
+    elBtnWind.addEventListener('click', () => {
+      windBarbsVisible = !windBarbsVisible;
+      elBtnWind.classList.toggle('active', windBarbsVisible);
+      elWindInterval.classList.toggle('hidden-control', !windBarbsVisible);
+      if (windBarbsVisible) refreshWindBarbs();
+      else for (const [, entry] of boats) MapManager.hideWindBarbs(entry.boat);
+    });
+    elWindInterval.addEventListener('change', () => {
+      windInterval = parseInt(elWindInterval.value);
+      if (windBarbsVisible) refreshWindBarbs();
+    });
+
+    // Tack colour toggle
+    elBtnTackColor.addEventListener('click', () => {
+      tackColorMode = !tackColorMode;
+      elBtnTackColor.classList.toggle('active', tackColorMode);
+      for (const [, entry] of boats) {
+        if (tackColorMode) {
+          MapManager.setTackMode(entry.boat, computeTackSegments(entry));
+        } else {
+          MapManager.clearTackMode(entry.boat);
+        }
+      }
+    });
+
     // Modal
     elBtnModalOk.addEventListener('click', confirmBoatName);
     elBoatNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmBoatName(); });
@@ -175,12 +221,14 @@ const App = (() => {
     }
 
     MapManager.addBoat(boat);
+    if (tackColorMode) {
+      MapManager.setTackMode(boat, computeTackSegments(boats.get(boat.name)));
+    }
+    if (currentView === 'beating') Analysis.render(collectUpwindData());
+    if (currentView === 'twd') renderTwdTable();
 
-    // Extend timeline range
-    let { minTs, maxTs } = Playback.getState();
-    const newMin = minTs === 0 ? boat.minTs : Math.min(minTs, boat.minTs);
-    const newMax = maxTs === 0 ? boat.maxTs : Math.max(maxTs, boat.maxTs);
-    Playback.setRange(newMin, newMax);
+    recalcPlaybackRange();
+    if (windBarbsVisible) MapManager.showWindBarbs(boat, computeWindBarbs(boats.get(boat.name)));
 
     // Show the UI
     elEmptyOverlay.classList.add('hidden');
@@ -226,6 +274,228 @@ const App = (() => {
     return series[lo].val;
   }
 
+  function refreshWindBarbs() {
+    for (const [, entry] of boats) {
+      MapManager.showWindBarbs(entry.boat, computeWindBarbs(entry));
+    }
+  }
+
+  function computeWindBarbs(entry) {
+    const { boat } = entry;
+    const { trimStart, trimEnd } = Playback.getState();
+    const barbs = [];
+    let nextTs = trimStart;
+    for (const r of boat.gpsRows) {
+      if (r.ts < trimStart || r.ts > trimEnd) continue;
+      if (r.ts < nextTs) continue;
+      const twd = getFieldValue(entry, 'TWD', r.ts);
+      const tws = getFieldValue(entry, 'TWS', r.ts);
+      if (twd !== null && tws !== null) barbs.push({ lat: r.lat, lon: r.lon, twd, tws });
+      nextTs = r.ts + windInterval;
+    }
+    return barbs;
+  }
+
+  function recalcPlaybackRange() {
+    if (boats.size === 0) { Playback.setRange(0, 0); return; }
+    let minTs = Infinity, maxTs = -Infinity;
+    for (const [, entry] of boats) {
+      minTs = Math.min(minTs, entry.boat.minTs);
+      maxTs = Math.max(maxTs, entry.boat.maxTs);
+    }
+    Playback.setRange(minTs, maxTs);
+  }
+
+  // ── View switching ────────────────────────────────────────────────────────────
+
+  function switchView(view) {
+    currentView = view;
+    document.getElementById('tab-map').classList.toggle('active', view === 'map');
+    document.getElementById('tab-beating').classList.toggle('active', view === 'beating');
+    document.getElementById('tab-twd').classList.toggle('active', view === 'twd');
+    document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
+    document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
+    document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
+    if (view === 'map')     MapManager.invalidateSize();
+    if (view === 'beating') Analysis.render(collectUpwindData());
+    if (view === 'twd') renderTwdTable();
+  }
+
+  function collectUpwindData() {
+    const { trimStart, trimEnd } = Playback.getState();
+    const points = [];
+    for (const [, entry] of boats) {
+      const twaId = entry.boat.nameToId['TWA'];
+      if (twaId === undefined) continue;
+      const twaSeries = entry.fieldTimeseries[twaId];
+      if (!twaSeries) continue;
+      for (const { ts, val: twa } of twaSeries) {
+        if (ts < trimStart || ts > trimEnd) continue;
+        if (Math.abs(twa) >= 55) continue;
+        const bsp = getFieldValue(entry, 'BSP', ts);
+        if (bsp === null || bsp < 0) continue;
+        points.push({ twa, bsp, color: twa < 0 ? '#e53935' : '#43a047' });
+      }
+    }
+    return points;
+  }
+
+  // ── TWD tack analysis ─────────────────────────────────────────────────────────
+
+  function circularMean(degrees) {
+    if (degrees.length === 0) return null;
+    const sinSum = degrees.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
+    const cosSum = degrees.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
+    return ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
+  }
+
+  function avgTwdInWindow(entry, fromTs, toTs) {
+    const twdId = entry.boat.nameToId['TWD'];
+    if (twdId === undefined) return null;
+    const series = entry.fieldTimeseries[twdId];
+    if (!series) return null;
+    const vals = series.filter(p => p.ts >= fromTs && p.ts <= toTs).map(p => p.val);
+    return circularMean(vals);
+  }
+
+  function twdRangeInWindow(entry, fromTs, toTs) {
+    const twdId = entry.boat.nameToId['TWD'];
+    if (twdId === undefined) return 0;
+    const series = entry.fieldTimeseries[twdId];
+    if (!series) return 0;
+    const vals = series.filter(p => p.ts >= fromTs && p.ts <= toTs).map(p => p.val);
+    if (vals.length < 2) return 0;
+    const mean = circularMean(vals);
+    const rotated = vals.map(v => {
+      let d = v - mean;
+      if (d >  180) d -= 360;
+      if (d < -180) d += 360;
+      return d;
+    });
+    return Math.max(...rotated) - Math.min(...rotated);
+  }
+
+  function detectTacks(entry) {
+    const twaId = entry.boat.nameToId['TWA'];
+    if (twaId === undefined) return [];
+    const series = entry.fieldTimeseries[twaId];
+    if (!series || series.length < 2) return [];
+
+    const { trimStart, trimEnd } = Playback.getState();
+    const MIN_INTERVAL = 30000; // ms — ignore secondary sign-changes within 30 s
+    const tacks = [];
+    let lastTackTs = -Infinity;
+
+    for (let i = 1; i < series.length; i++) {
+      const prev = series[i - 1];
+      const curr = series[i];
+      if (curr.ts < trimStart || prev.ts > trimEnd) continue;
+      if (Math.abs(prev.val) >= 90 || Math.abs(curr.val) >= 90) continue;
+      if (prev.val * curr.val >= 0) continue; // no sign change
+
+      // Interpolate zero-crossing time
+      const frac   = Math.abs(prev.val) / (Math.abs(prev.val) + Math.abs(curr.val));
+      const tackTs = prev.ts + frac * (curr.ts - prev.ts);
+      if (tackTs - lastTackTs < MIN_INTERVAL) continue;
+      lastTackTs = tackTs;
+
+      const wasStarboard = prev.val > 0; // positive TWA = starboard tack
+      const twdBefore = avgTwdInWindow(entry, tackTs - 60000, tackTs - 30000);
+      const twdAfter  = avgTwdInWindow(entry, tackTs + 30000, tackTs + 60000);
+      if (twdBefore === null || twdAfter === null) continue;
+
+      const beforeRange = twdRangeInWindow(entry, tackTs - 60000, tackTs - 30000);
+      const afterRange  = twdRangeInWindow(entry, tackTs + 30000, tackTs + 60000);
+      const unstable = beforeRange > 10 || afterRange > 10;
+
+      tacks.push({
+        ts:      tackTs,
+        portTwd: wasStarboard ? twdAfter  : twdBefore,
+        stbdTwd: wasStarboard ? twdBefore : twdAfter,
+        unstable,
+      });
+    }
+    return tacks;
+  }
+
+  function renderTwdTable() {
+    const el = document.getElementById('twd-content');
+    if (boats.size === 0) {
+      el.innerHTML = '<p class="twd-empty">No log files loaded.</p>';
+      return;
+    }
+    let html = '';
+    for (const [, entry] of boats) {
+      const tacks = detectTacks(entry);
+      html += `<div class="twd-boat-section">`;
+      html += `<div class="twd-boat-header">
+        <span class="boat-dot" style="background:${entry.boat.color}"></span>
+        ${entry.boat.name}
+      </div>`;
+      if (tacks.length === 0) {
+        html += `<p class="twd-empty">No tacks detected in the selected range.</p>`;
+      } else {
+        html += `<table class="twd-table">
+          <thead><tr>
+            <th>Time (UTC)</th>
+            <th>Port TWD</th>
+            <th>Starboard TWD</th>
+            <th>Shift</th>
+          </tr></thead><tbody>`;
+        for (const t of tacks) {
+          const d   = new Date(t.ts);
+          const hms = [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()]
+                        .map(n => String(n).padStart(2, '0')).join(':');
+          // Shift: signed difference (port − starboard), wrapped to ±180
+          let shift = t.portTwd - t.stbdTwd;
+          if (shift >  180) shift -= 360;
+          if (shift < -180) shift += 360;
+          const shiftStr = (shift >= 0 ? '+' : '') + shift.toFixed(1) + '°';
+          const rowStyle = t.unstable ? ' style="color:#ef9a9a"' : '';
+          html += `<tr${rowStyle}>
+            <td>${hms}</td>
+            <td>${t.portTwd.toFixed(1)}°</td>
+            <td>${t.stbdTwd.toFixed(1)}°</td>
+            <td>${shiftStr}</td>
+          </tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+      html += `</div>`;
+    }
+    el.innerHTML = html;
+  }
+
+  function computeTackSegments(entry) {
+    const { boat } = entry;
+    const PORT_COLOR  = '#e53935';  // red  — port tack  (TWA < 0)
+    const STBD_COLOR  = '#43a047';  // green — starboard tack (TWA > 0)
+    const segments = [];
+    let segColor  = null;
+    let segLatlngs = [];
+
+    for (const r of boat.gpsRows) {
+      const twa = getFieldValue(entry, 'TWA', r.ts);
+      const color = twa === null ? boat.color
+                  : twa < 0    ? PORT_COLOR
+                  :              STBD_COLOR;
+
+      if (segColor === null) segColor = color;
+
+      if (color !== segColor) {
+        // Tack change: close current segment including this point for continuity
+        segLatlngs.push([r.lat, r.lon]);
+        segments.push({ latlngs: segLatlngs, color: segColor });
+        segLatlngs = [[r.lat, r.lon]];
+        segColor   = color;
+      } else {
+        segLatlngs.push([r.lat, r.lon]);
+      }
+    }
+    if (segLatlngs.length > 0) segments.push({ latlngs: segLatlngs, color: segColor });
+    return segments;
+  }
+
   // ── Playback callbacks ────────────────────────────────────────────────────────
 
   function onTick(ts) {
@@ -242,6 +512,9 @@ const App = (() => {
       MapManager.setTrim(entry.boat, start, end);
     }
     updateScrubberRange();
+    if (currentView === 'beating') Analysis.render(collectUpwindData());
+    if (currentView === 'twd') renderTwdTable();
+    if (windBarbsVisible) refreshWindBarbs();
   }
 
   function onPlayStateChange(playing) {
@@ -268,6 +541,12 @@ const App = (() => {
         const name = btn.dataset.name;
         MapManager.removeBoat(name);
         boats.delete(name);
+        recalcPlaybackRange();
+        const st = Playback.getState();
+        for (const [, entry] of boats) MapManager.clearTrim(entry.boat);
+        onTick(st.currentTs);
+        if (currentView === 'beating') Analysis.render(collectUpwindData());
+        if (currentView === 'twd') renderTwdTable();
         renderBoatList();
         renderVariablePanel();
         updateAddVarDropdown();

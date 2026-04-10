@@ -24,12 +24,13 @@ const Playback = (() => {
   }
 
   function setRange(minTs, maxTs) {
-    state.minTs = minTs;
-    state.maxTs = maxTs;
-    if (state.trimStart === null || state.trimStart < minTs) state.trimStart = minTs;
-    if (state.trimEnd   === null || state.trimEnd   > maxTs) state.trimEnd   = maxTs;
-    if (state.currentTs < effectiveStart() || state.currentTs > effectiveEnd()) {
-      state.currentTs = effectiveStart();
+    state.minTs    = minTs;
+    state.maxTs    = maxTs;
+    // Always reset trim to the full new range (boats changed, old trim is stale)
+    state.trimStart = minTs;
+    state.trimEnd   = maxTs;
+    if (state.currentTs < minTs || state.currentTs > maxTs) {
+      state.currentTs = minTs;
     }
   }
 
