@@ -171,6 +171,8 @@ const App = (() => {
     // Modal
     elBtnModalOk.addEventListener('click', confirmBoatName);
     elBoatNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmBoatName(); });
+
+    switchView('map');
   }
 
   // ── File handling ─────────────────────────────────────────────────────────────
@@ -272,6 +274,42 @@ const App = (() => {
     return entry.fieldTimeseries[fieldId] || null;
   }
 
+  function vmgAt(entry, ts) {
+    const bsp = getFieldValue(entry, 'BSP', ts);
+    const twa = getFieldValue(entry, 'TWA', ts);
+    if (bsp === null || twa === null || bsp < 0) return null;
+    return bsp * Math.cos(twa * Math.PI / 180);
+  }
+
+  function avgVmgInWindow(entry, fromTs, toTs) {
+    const twaSeries = getFieldSeries(entry, 'TWA');
+    if (!twaSeries) return null;
+    const slice = sliceSeriesByTs(twaSeries, fromTs, toTs);
+    if (slice.length === 0) return null;
+    let sum = 0, count = 0;
+    for (const { ts } of slice) {
+      const v = vmgAt(entry, ts);
+      if (v !== null) { sum += v; count++; }
+    }
+    return count > 0 ? sum / count : null;
+  }
+
+  function integrateVmg(entry, fromTs, toTs) {
+    const twaSeries = getFieldSeries(entry, 'TWA');
+    if (!twaSeries) return null;
+    const slice = sliceSeriesByTs(twaSeries, fromTs, toTs);
+    if (slice.length < 2) return null;
+    let integral = 0;
+    let prev = null;
+    for (const { ts } of slice) {
+      const v = vmgAt(entry, ts);
+      if (v === null) { prev = null; continue; }
+      if (prev !== null) integral += (prev.v + v) / 2 * (ts - prev.ts) / 1000;
+      prev = { ts, v };
+    }
+    return integral; // knot-seconds
+  }
+
   function carryForward(series, ts) {
     if (ts < series[0].ts) return null;
     if (ts >= series[series.length - 1].ts) return series[series.length - 1].val;
@@ -325,6 +363,7 @@ const App = (() => {
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
+    document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
     if (view === 'map')     MapManager.invalidateSize();
     if (view === 'beating') Analysis.render(collectUpwindData());
     if (view === 'twd') renderTwdTable();
@@ -385,6 +424,12 @@ const App = (() => {
     return { mean, range: Math.max(...rotated) - Math.min(...rotated) };
   }
 
+  // Tack analysis windows (ms relative to tack timestamp)
+  const TACK_PRE_FROM  = -40000, TACK_PRE_TO  = -10000;
+  const TACK_POST_FROM =  30000, TACK_POST_TO =  60000;
+  const TACK_INT_FROM  = -10000, TACK_INT_TO  =  30000;
+  const TACK_INT_S = (TACK_INT_TO - TACK_INT_FROM) / 1000; // integration window in seconds
+
   function detectTacks(entry) {
     const series = getFieldSeries(entry, 'TWA');
     if (!series || series.length < 2) return [];
@@ -412,23 +457,177 @@ const App = (() => {
       const after  = twdWindowStats(entry, tackTs + 30000, tackTs + 60000);
       if (before === null || after === null) continue;
 
+      const preMean  = avgVmgInWindow(entry, tackTs + TACK_PRE_FROM,  tackTs + TACK_PRE_TO);
+      const postMean = avgVmgInWindow(entry, tackTs + TACK_POST_FROM, tackTs + TACK_POST_TO);
+      const baseline = (preMean !== null && postMean !== null) ? (preMean + postMean) / 2 : null;
+      const integral = integrateVmg(entry, tackTs + TACK_INT_FROM, tackTs + TACK_INT_TO);
+      const groundLost = (baseline !== null && integral !== null)
+        ? (baseline * TACK_INT_S - integral) * 0.5144  // knot-s → metres
+        : null;
+
+      // Pre-compute VMG profile for chart
+      const profile = [];
+      const twaSeries = getFieldSeries(entry, 'TWA');
+      if (twaSeries) {
+        const slice = sliceSeriesByTs(twaSeries, tackTs + TACK_PRE_FROM, tackTs + TACK_POST_TO);
+        for (const { ts } of slice) {
+          const v = vmgAt(entry, ts);
+          if (v !== null) profile.push({ t: (ts - tackTs) / 1000, vmg: v });
+        }
+      }
+
       tacks.push({
-        ts:      tackTs,
-        portTwd: wasStarboard ? after.mean  : before.mean,
-        stbdTwd: wasStarboard ? before.mean : after.mean,
+        ts:       tackTs,
+        portTwd:  wasStarboard ? after.mean  : before.mean,
+        stbdTwd:  wasStarboard ? before.mean : after.mean,
         unstable: before.range > 10 || after.range > 10,
+        groundLost,
+        baseline,
+        profile,
       });
     }
     return tacks;
+  }
+
+  function renderTackVmgChart(profiles) {
+    const canvas = document.getElementById('tack-vmg-canvas');
+    if (!canvas.offsetWidth) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.offsetWidth, H = canvas.offsetHeight;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    ctx.scale(dpr, dpr);
+
+    const BG    = '#0f1923';
+    const GRID  = '#1e3248';
+    const LABEL = '#7fb3cc';
+    const TITLE = '#c8e6f5';
+    const M = { top: 24, right: 20, bottom: 44, left: 52 };
+    const pW = W - M.left - M.right;
+    const pH = H - M.top  - M.bottom;
+
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    if (profiles.length === 0) {
+      ctx.fillStyle = LABEL;
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No tacks detected — upload a log with upwind sailing', W / 2, H / 2);
+      return;
+    }
+
+    const X_MIN = TACK_PRE_FROM / 1000, X_MAX = TACK_POST_TO / 1000;
+    const allVmg = profiles.flatMap(p => p.points.map(pt => pt.vmg));
+    const yMax = Math.ceil(allVmg.reduce((m, v) => Math.max(m, v), 1) * 1.1);
+
+    const toX = t   => M.left + (t - X_MIN) / (X_MAX - X_MIN) * pW;
+    const toY = vmg => M.top  + (1 - vmg / yMax) * pH;
+
+    // Grid lines
+    ctx.strokeStyle = GRID;
+    ctx.lineWidth = 1;
+    for (let y = 0; y <= yMax; y++) {
+      const py = toY(y);
+      ctx.beginPath(); ctx.moveTo(M.left, py); ctx.lineTo(M.left + pW, py); ctx.stroke();
+    }
+    for (let x = X_MIN; x <= X_MAX; x += 10) {
+      const px = toX(x);
+      ctx.beginPath(); ctx.moveTo(px, M.top); ctx.lineTo(px, M.top + pH); ctx.stroke();
+    }
+
+    // Window boundary markers
+    const boundaries = [
+      { t: TACK_PRE_FROM / 1000,  label: `${TACK_PRE_FROM / 1000}s`,               dash: [4, 4], color: '#4a7fa5' },
+      { t: TACK_INT_FROM / 1000,  label: `${TACK_INT_FROM / 1000}s`,               dash: [4, 4], color: '#4a7fa5' },
+      { t: 0,                     label: 'Tack',                                    dash: [],     color: '#7fb3cc' },
+      { t: TACK_INT_TO   / 1000,  label: `+${TACK_INT_TO   / 1000}s`,              dash: [4, 4], color: '#4a7fa5' },
+      { t: TACK_POST_TO  / 1000,  label: `+${TACK_POST_TO  / 1000}s`,              dash: [4, 4], color: '#4a7fa5' },
+    ];
+    ctx.lineWidth = 1;
+    boundaries.forEach(({ t, label, dash, color }) => {
+      const px = toX(t);
+      ctx.setLineDash(dash);
+      ctx.strokeStyle = color;
+      ctx.beginPath(); ctx.moveTo(px, M.top); ctx.lineTo(px, M.top + pH); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.font = '9px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, px, M.top + pH + 14);
+    });
+
+    // VMG profiles
+    profiles.forEach(({ color, points, baseline }) => {
+      // Baseline dashed line
+      if (baseline !== null) {
+        ctx.setLineDash([6, 3]);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.45;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(M.left, toY(baseline));
+        ctx.lineTo(M.left + pW, toY(baseline));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+
+      // Actual VMG line
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let started = false;
+      for (const { t, vmg } of points) {
+        const px = toX(t), py = toY(vmg);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+
+    // Axes
+    ctx.strokeStyle = LABEL;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(M.left, M.top); ctx.lineTo(M.left, M.top + pH);
+    ctx.lineTo(M.left + pW, M.top + pH);
+    ctx.stroke();
+
+    // Y tick labels
+    ctx.fillStyle = LABEL;
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let y = 0; y <= yMax; y++) {
+      ctx.fillText(y, M.left - 6, toY(y));
+    }
+
+    // Axis titles
+    ctx.fillStyle = TITLE;
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('Time relative to tack (s)', M.left + pW / 2, H - 6);
+    ctx.save();
+    ctx.translate(12, M.top + pH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('VMG (kts)', 0, 0);
+    ctx.restore();
   }
 
   function renderTwdTable() {
     const el = document.getElementById('twd-content');
     if (boats.size === 0) {
       el.innerHTML = '<p class="twd-empty">No log files loaded.</p>';
+      renderTackVmgChart([]);
       return;
     }
     let html = '';
+    const allProfiles = [];
     for (const [, entry] of boats) {
       const tacks = detectTacks(entry);
       html += `<div class="twd-boat-section">`;
@@ -436,15 +635,21 @@ const App = (() => {
         <span class="boat-dot" style="background:${entry.boat.color}"></span>
         ${entry.boat.name}
       </div>`;
+      for (const t of tacks) {
+        if (t.profile.length > 1) allProfiles.push({ color: entry.boat.color, points: t.profile, baseline: t.baseline ?? null });
+      }
+
       if (tacks.length === 0) {
         html += `<p class="twd-empty">No tacks detected in the selected range.</p>`;
       } else {
+        const showGroundLost = tacks.some(t => t.groundLost !== null);
         html += `<table class="twd-table">
           <thead><tr>
             <th>Time (UTC)</th>
             <th>Port TWD</th>
             <th>Starboard TWD</th>
             <th>Shift</th>
+            ${showGroundLost ? '<th>Ground Lost</th>' : ''}
           </tr></thead><tbody>`;
         for (const t of tacks) {
           const d   = new Date(t.ts);
@@ -453,11 +658,15 @@ const App = (() => {
           const shift = normalizeAngle(t.portTwd - t.stbdTwd);
           const shiftStr = (shift >= 0 ? '+' : '') + shift.toFixed(1) + '°';
           const rowStyle = t.unstable ? ' style="color:#ef9a9a"' : '';
+          const groundLostCell = showGroundLost
+            ? `<td>${t.groundLost !== null ? t.groundLost.toFixed(1) + ' m' : '—'}</td>`
+            : '';
           html += `<tr${rowStyle}>
             <td>${hms}</td>
             <td>${t.portTwd.toFixed(1)}°</td>
             <td>${t.stbdTwd.toFixed(1)}°</td>
             <td>${shiftStr}</td>
+            ${groundLostCell}
           </tr>`;
         }
         html += `</tbody></table>`;
@@ -465,6 +674,7 @@ const App = (() => {
       html += `</div>`;
     }
     el.innerHTML = html;
+    renderTackVmgChart(allProfiles);
   }
 
   function computeTackSegments(entry) {
