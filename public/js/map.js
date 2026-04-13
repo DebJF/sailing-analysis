@@ -16,6 +16,7 @@ const MapManager = (() => {
     map.on('zoomend', () => {
       for (const [, e] of entries) {
         if (e.windBarbs && e.windBarbs.length > 0) _renderWindBarbs(e);
+        e.marker.setIcon(buildBoatIcon(e.boat.color, e.heading ?? 0));
       }
     });
 
@@ -39,17 +40,12 @@ const MapManager = (() => {
 
 
     const startPos = latlngs.length > 0 ? latlngs[0] : [50.78, -1.22];
-    const marker = L.circleMarker(startPos, {
-      radius: 8,
-      fillColor: boat.color,
-      color: '#fff',
-      weight: 2,
-      fillOpacity: 1,
-      opacity: 1,
+    const marker = L.marker(startPos, {
+      icon: buildBoatIcon(boat.color, 0),
       zIndexOffset: 1000,
     }).addTo(map).bindTooltip(boat.name, { permanent: false, direction: 'top' });
 
-    entries.set(boat.name, { boat, polyline, marker, trimPolyline: null, tackPolylines: [], windMarkers: [], windBarbs: [] });
+    entries.set(boat.name, { boat, polyline, marker, trimPolyline: null, tackPolylines: [], windMarkers: [], windBarbs: [], heading: 0 });
 
     // Fit map to all tracks
     const allBounds = [];
@@ -96,33 +92,52 @@ const MapManager = (() => {
     e.polyline.setStyle({ opacity: e.trimPolyline ? 0.15 : 0.75 });
   }
 
-  function updateMarker(boat, ts) {
+  const BOAT_VW = 14, BOAT_VH = 24;
+
+  function buildBoatIcon(color, heading) {
+    const s  = barbScale();
+    const W  = Math.round(BOAT_VW * s);
+    const H  = Math.round(BOAT_VH * s);
+    const ax = Math.round(W / 2);
+    const ay = Math.round(H / 2);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${BOAT_VW} ${BOAT_VH}"><path d="M 7,1 C 13,8 13,17 11,22 L 3,22 C 1,17 1,8 7,1 Z" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
+    const html = `<div style="width:${W}px;height:${H}px;transform:rotate(${heading}deg);transform-origin:${ax}px ${ay}px">${svg}</div>`;
+    return L.divIcon({ html, className: '', iconSize: [W, H], iconAnchor: [ax, ay] });
+  }
+
+  function updateMarker(boat, ts, heading) {
     const e = entries.get(boat.name);
     if (!e) return;
     const gps = boat.gpsRows;
     if (gps.length === 0) return;
 
+    e.heading = heading ?? 0;
+
     if (ts <= gps[0].ts) {
       e.marker.setLatLng([gps[0].lat, gps[0].lon]);
-      return;
-    }
-    const last = gps[gps.length - 1];
-    if (ts >= last.ts) {
-      e.marker.setLatLng([last.lat, last.lon]);
-      return;
+    } else {
+      const last = gps[gps.length - 1];
+      if (ts >= last.ts) {
+        e.marker.setLatLng([last.lat, last.lon]);
+      } else {
+        // Binary search for surrounding rows
+        let lo = 0, hi = gps.length - 1;
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1;
+          if (gps[mid].ts <= ts) lo = mid; else hi = mid;
+        }
+        const t0 = gps[lo].ts, t1 = gps[hi].ts;
+        const frac = t1 > t0 ? (ts - t0) / (t1 - t0) : 0;
+        e.marker.setLatLng([
+          gps[lo].lat + frac * (gps[hi].lat - gps[lo].lat),
+          gps[lo].lon + frac * (gps[hi].lon - gps[lo].lon),
+        ]);
+      }
     }
 
-    // Binary search for surrounding rows
-    let lo = 0, hi = gps.length - 1;
-    while (lo < hi - 1) {
-      const mid = (lo + hi) >> 1;
-      if (gps[mid].ts <= ts) lo = mid; else hi = mid;
-    }
-    const t0 = gps[lo].ts, t1 = gps[hi].ts;
-    const frac = t1 > t0 ? (ts - t0) / (t1 - t0) : 0;
-    const lat = gps[lo].lat + frac * (gps[hi].lat - gps[lo].lat);
-    const lon = gps[lo].lon + frac * (gps[hi].lon - gps[lo].lon);
-    e.marker.setLatLng([lat, lon]);
+    // Update rotation directly on the DOM element — avoids rebuilding SVG every tick
+    const inner = e.marker._icon?.firstChild;
+    if (inner) inner.style.transform = `rotate(${e.heading}deg)`;
   }
 
   function setTrim(boat, startTs, endTs) {

@@ -12,6 +12,9 @@ const App = (() => {
 
   const DEFAULT_VAR_NAMES = ['BSP', 'TWS', 'TWA', 'Pol0%'];
 
+  const PORT_COLOR = '#e53935';
+  const STBD_COLOR = '#43a047';
+
   // ── State ────────────────────────────────────────────────────────────────────
 
   // name → { boat, fieldTimeseries: Map<fieldId, [{ts,val}]> }
@@ -263,6 +266,12 @@ const App = (() => {
     return carryForward(series, ts);
   }
 
+  function getFieldSeries(entry, fieldName) {
+    const fieldId = entry.boat.nameToId[fieldName];
+    if (fieldId === undefined) return null;
+    return entry.fieldTimeseries[fieldId] || null;
+  }
+
   function carryForward(series, ts) {
     if (ts < series[0].ts) return null;
     if (ts >= series[series.length - 1].ts) return series[series.length - 1].val;
@@ -325,16 +334,14 @@ const App = (() => {
     const { trimStart, trimEnd } = Playback.getState();
     const points = [];
     for (const [, entry] of boats) {
-      const twaId = entry.boat.nameToId['TWA'];
-      if (twaId === undefined) continue;
-      const twaSeries = entry.fieldTimeseries[twaId];
+      const twaSeries = getFieldSeries(entry, 'TWA');
       if (!twaSeries) continue;
       for (const { ts, val: twa } of twaSeries) {
         if (ts < trimStart || ts > trimEnd) continue;
         if (Math.abs(twa) >= 55) continue;
         const bsp = getFieldValue(entry, 'BSP', ts);
         if (bsp === null || bsp < 0) continue;
-        points.push({ twa, bsp, color: twa < 0 ? '#e53935' : '#43a047' });
+        points.push({ twa, bsp, color: twa < 0 ? PORT_COLOR : STBD_COLOR });
       }
     }
     return points;
@@ -349,36 +356,37 @@ const App = (() => {
     return ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
   }
 
-  function avgTwdInWindow(entry, fromTs, toTs) {
-    const twdId = entry.boat.nameToId['TWD'];
-    if (twdId === undefined) return null;
-    const series = entry.fieldTimeseries[twdId];
-    if (!series) return null;
-    const vals = series.filter(p => p.ts >= fromTs && p.ts <= toTs).map(p => p.val);
-    return circularMean(vals);
+  function normalizeAngle(d) {
+    if (d >  180) return d - 360;
+    if (d < -180) return d + 360;
+    return d;
   }
 
-  function twdRangeInWindow(entry, fromTs, toTs) {
-    const twdId = entry.boat.nameToId['TWD'];
-    if (twdId === undefined) return 0;
-    const series = entry.fieldTimeseries[twdId];
-    if (!series) return 0;
-    const vals = series.filter(p => p.ts >= fromTs && p.ts <= toTs).map(p => p.val);
-    if (vals.length < 2) return 0;
+  // Binary-search slice of a [{ts,val}] series to a time window — O(log n)
+  function sliceSeriesByTs(series, fromTs, toTs) {
+    let lo = 0, hi = series.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (series[mid].ts < fromTs) lo = mid + 1; else hi = mid; }
+    const start = lo;
+    lo = start; hi = series.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (series[mid].ts <= toTs) lo = mid + 1; else hi = mid; }
+    return series.slice(start, lo);
+  }
+
+  // Returns {mean, range} for TWD in a time window, or null if no data
+  function twdWindowStats(entry, fromTs, toTs) {
+    const series = getFieldSeries(entry, 'TWD');
+    if (!series) return null;
+    const slice = sliceSeriesByTs(series, fromTs, toTs);
+    if (slice.length === 0) return null;
+    const vals = slice.map(p => p.val);
     const mean = circularMean(vals);
-    const rotated = vals.map(v => {
-      let d = v - mean;
-      if (d >  180) d -= 360;
-      if (d < -180) d += 360;
-      return d;
-    });
-    return Math.max(...rotated) - Math.min(...rotated);
+    if (slice.length < 2) return { mean, range: 0 };
+    const rotated = vals.map(v => normalizeAngle(v - mean));
+    return { mean, range: Math.max(...rotated) - Math.min(...rotated) };
   }
 
   function detectTacks(entry) {
-    const twaId = entry.boat.nameToId['TWA'];
-    if (twaId === undefined) return [];
-    const series = entry.fieldTimeseries[twaId];
+    const series = getFieldSeries(entry, 'TWA');
     if (!series || series.length < 2) return [];
 
     const { trimStart, trimEnd } = Playback.getState();
@@ -399,20 +407,16 @@ const App = (() => {
       if (tackTs - lastTackTs < MIN_INTERVAL) continue;
       lastTackTs = tackTs;
 
-      const wasStarboard = prev.val > 0; // positive TWA = starboard tack
-      const twdBefore = avgTwdInWindow(entry, tackTs - 60000, tackTs - 30000);
-      const twdAfter  = avgTwdInWindow(entry, tackTs + 30000, tackTs + 60000);
-      if (twdBefore === null || twdAfter === null) continue;
-
-      const beforeRange = twdRangeInWindow(entry, tackTs - 60000, tackTs - 30000);
-      const afterRange  = twdRangeInWindow(entry, tackTs + 30000, tackTs + 60000);
-      const unstable = beforeRange > 10 || afterRange > 10;
+      const wasStarboard = prev.val > 0;
+      const before = twdWindowStats(entry, tackTs - 60000, tackTs - 30000);
+      const after  = twdWindowStats(entry, tackTs + 30000, tackTs + 60000);
+      if (before === null || after === null) continue;
 
       tacks.push({
         ts:      tackTs,
-        portTwd: wasStarboard ? twdAfter  : twdBefore,
-        stbdTwd: wasStarboard ? twdBefore : twdAfter,
-        unstable,
+        portTwd: wasStarboard ? after.mean  : before.mean,
+        stbdTwd: wasStarboard ? before.mean : after.mean,
+        unstable: before.range > 10 || after.range > 10,
       });
     }
     return tacks;
@@ -446,10 +450,7 @@ const App = (() => {
           const d   = new Date(t.ts);
           const hms = [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()]
                         .map(n => String(n).padStart(2, '0')).join(':');
-          // Shift: signed difference (port − starboard), wrapped to ±180
-          let shift = t.portTwd - t.stbdTwd;
-          if (shift >  180) shift -= 360;
-          if (shift < -180) shift += 360;
+          const shift = normalizeAngle(t.portTwd - t.stbdTwd);
           const shiftStr = (shift >= 0 ? '+' : '') + shift.toFixed(1) + '°';
           const rowStyle = t.unstable ? ' style="color:#ef9a9a"' : '';
           html += `<tr${rowStyle}>
@@ -468,8 +469,6 @@ const App = (() => {
 
   function computeTackSegments(entry) {
     const { boat } = entry;
-    const PORT_COLOR  = '#e53935';  // red  — port tack  (TWA < 0)
-    const STBD_COLOR  = '#43a047';  // green — starboard tack (TWA > 0)
     const segments = [];
     let segColor  = null;
     let segLatlngs = [];
@@ -500,7 +499,8 @@ const App = (() => {
 
   function onTick(ts) {
     for (const [, entry] of boats) {
-      MapManager.updateMarker(entry.boat, ts);
+      const hdg = getFieldValue(entry, 'HDG', ts) ?? getFieldValue(entry, 'COG', ts) ?? 0;
+      MapManager.updateMarker(entry.boat, ts, hdg);
     }
     updateVariableValues(ts);
     updateScrubber(ts);
