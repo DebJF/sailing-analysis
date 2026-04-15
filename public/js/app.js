@@ -80,6 +80,7 @@ const App = (() => {
     document.getElementById('tab-map').addEventListener('click', () => switchView('map'));
     document.getElementById('tab-beating').addEventListener('click', () => switchView('beating'));
     document.getElementById('tab-twd').addEventListener('click', () => switchView('twd'));
+    document.getElementById('tab-gybe').addEventListener('click', () => switchView('gybe'));
 
     // Populate speed selector
     Playback.SPEEDS.forEach(s => {
@@ -230,7 +231,8 @@ const App = (() => {
       MapManager.setTackMode(boat, computeTackSegments(boats.get(boat.name)));
     }
     if (currentView === 'beating') Analysis.render(collectUpwindData());
-    if (currentView === 'twd') renderTwdTable();
+    if (currentView === 'twd')  renderTwdTable();
+    if (currentView === 'gybe') renderGybeTable();
 
     recalcPlaybackRange();
     if (windBarbsVisible) MapManager.showWindBarbs(boat, computeWindBarbs(boats.get(boat.name)));
@@ -360,13 +362,16 @@ const App = (() => {
     document.getElementById('tab-map').classList.toggle('active', view === 'map');
     document.getElementById('tab-beating').classList.toggle('active', view === 'beating');
     document.getElementById('tab-twd').classList.toggle('active', view === 'twd');
+    document.getElementById('tab-gybe').classList.toggle('active', view === 'gybe');
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
+    document.getElementById('gybe-container').classList.toggle('view-hidden', view !== 'gybe');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
     if (view === 'map')     MapManager.invalidateSize();
     if (view === 'beating') Analysis.render(collectUpwindData());
-    if (view === 'twd') renderTwdTable();
+    if (view === 'twd')  renderTwdTable();
+    if (view === 'gybe') renderGybeTable();
   }
 
   function collectUpwindData() {
@@ -427,7 +432,7 @@ const App = (() => {
   // Tack analysis windows (ms relative to tack timestamp)
   const TACK_PRE_FROM  = -40000, TACK_PRE_TO  = -10000;
   const TACK_POST_FROM =  30000, TACK_POST_TO =  60000;
-  const TACK_INT_FROM  = -10000, TACK_INT_TO  =  30000;
+  const TACK_INT_FROM  = -10000, TACK_INT_TO  =  50000;
   const TACK_INT_S = (TACK_INT_TO - TACK_INT_FROM) / 1000; // integration window in seconds
 
   function detectTacks(entry) {
@@ -450,47 +455,44 @@ const App = (() => {
       const frac   = Math.abs(prev.val) / (Math.abs(prev.val) + Math.abs(curr.val));
       const tackTs = prev.ts + frac * (curr.ts - prev.ts);
       if (tackTs - lastTackTs < MIN_INTERVAL) continue;
+      const prevTackTs = lastTackTs;
       lastTackTs = tackTs;
 
       const wasStarboard = prev.val > 0;
-      const before = twdWindowStats(entry, tackTs - 60000, tackTs - 30000);
-      const after  = twdWindowStats(entry, tackTs + 30000, tackTs + 60000);
+      const before = twdWindowStats(entry, tackTs + TACK_PRE_FROM,  tackTs + TACK_PRE_TO);
+      const after  = twdWindowStats(entry, tackTs + TACK_POST_FROM, tackTs + TACK_POST_TO);
       if (before === null || after === null) continue;
 
-      const preMean  = avgVmgInWindow(entry, tackTs + TACK_PRE_FROM,  tackTs + TACK_PRE_TO);
-      const postMean = avgVmgInWindow(entry, tackTs + TACK_POST_FROM, tackTs + TACK_POST_TO);
-      const baseline = (preMean !== null && postMean !== null) ? (preMean + postMean) / 2 : null;
+      const preMean  = avgVmgInWindow(entry, tackTs + TACK_PRE_FROM, tackTs + TACK_PRE_TO);
       const integral = integrateVmg(entry, tackTs + TACK_INT_FROM, tackTs + TACK_INT_TO);
-      const groundLost = (baseline !== null && integral !== null)
-        ? (baseline * TACK_INT_S - integral) * 0.5144  // knot-s → metres
+      const groundLost = (preMean !== null && integral !== null)
+        ? (preMean * TACK_INT_S - integral) * 0.5144  // knot-s → metres
         : null;
 
       // Pre-compute VMG profile for chart
       const profile = [];
-      const twaSeries = getFieldSeries(entry, 'TWA');
-      if (twaSeries) {
-        const slice = sliceSeriesByTs(twaSeries, tackTs + TACK_PRE_FROM, tackTs + TACK_POST_TO);
-        for (const { ts } of slice) {
-          const v = vmgAt(entry, ts);
-          if (v !== null) profile.push({ t: (ts - tackTs) / 1000, vmg: v });
-        }
+      const slice = sliceSeriesByTs(series, tackTs + TACK_PRE_FROM, tackTs + TACK_POST_TO);
+      for (const { ts } of slice) {
+        const v = vmgAt(entry, ts);
+        if (v !== null) profile.push({ t: (ts - tackTs) / 1000, vmg: v });
       }
 
       tacks.push({
-        ts:       tackTs,
-        portTwd:  wasStarboard ? after.mean  : before.mean,
-        stbdTwd:  wasStarboard ? before.mean : after.mean,
-        unstable: before.range > 10 || after.range > 10,
+        ts:               tackTs,
+        portTwd:          wasStarboard ? after.mean  : before.mean,
+        stbdTwd:          wasStarboard ? before.mean : after.mean,
+        unstable:         before.range > 10 || after.range > 10,
+        glUnreliable:     prevTackTs !== -Infinity && (tackTs - prevTackTs < TACK_INT_TO - TACK_PRE_FROM),
+        turnedToStarboard: wasStarboard,
         groundLost,
-        baseline,
         profile,
       });
     }
     return tacks;
   }
 
-  function renderTackVmgChart(profiles) {
-    const canvas = document.getElementById('tack-vmg-canvas');
+  function renderTackVmgChart(profiles, canvasId, xLabel, emptyMsg, centreLabel) {
+    const canvas = document.getElementById(canvasId);
     if (!canvas.offsetWidth) return;
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
@@ -514,7 +516,7 @@ const App = (() => {
       ctx.fillStyle = LABEL;
       ctx.font = '13px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('No tacks detected — upload a log with upwind sailing', W / 2, H / 2);
+      ctx.fillText(emptyMsg, W / 2, H / 2);
       return;
     }
 
@@ -541,7 +543,7 @@ const App = (() => {
     const boundaries = [
       { t: TACK_PRE_FROM / 1000,  label: `${TACK_PRE_FROM / 1000}s`,               dash: [4, 4], color: '#4a7fa5' },
       { t: TACK_INT_FROM / 1000,  label: `${TACK_INT_FROM / 1000}s`,               dash: [4, 4], color: '#4a7fa5' },
-      { t: 0,                     label: 'Tack',                                    dash: [],     color: '#7fb3cc' },
+      { t: 0,                     label: centreLabel,                               dash: [],     color: '#7fb3cc' },
       { t: TACK_INT_TO   / 1000,  label: `+${TACK_INT_TO   / 1000}s`,              dash: [4, 4], color: '#4a7fa5' },
       { t: TACK_POST_TO  / 1000,  label: `+${TACK_POST_TO  / 1000}s`,              dash: [4, 4], color: '#4a7fa5' },
     ];
@@ -611,7 +613,7 @@ const App = (() => {
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('Time relative to tack (s)', M.left + pW / 2, H - 6);
+    ctx.fillText(xLabel, M.left + pW / 2, H - 6);
     ctx.save();
     ctx.translate(12, M.top + pH / 2);
     ctx.rotate(-Math.PI / 2);
@@ -623,7 +625,7 @@ const App = (() => {
     const el = document.getElementById('twd-content');
     if (boats.size === 0) {
       el.innerHTML = '<p class="twd-empty">No log files loaded.</p>';
-      renderTackVmgChart([]);
+      renderTackVmgChart([], 'tack-vmg-canvas', 'Time relative to tack (s)', 'No tacks detected — upload a log with upwind sailing', 'Tack');
       return;
     }
     let html = '';
@@ -643,9 +645,16 @@ const App = (() => {
         html += `<p class="twd-empty">No tacks detected in the selected range.</p>`;
       } else {
         const showGroundLost = tacks.some(t => t.groundLost !== null);
+        // SVG semicircle arrows between 10 o'clock and 2 o'clock positions.
+        // Same arc shape; arrowhead at 2 o'clock end = starboard (clockwise), at 10 o'clock end = port.
+        // Arc from 10 o'clock (3,10) to 2 o'clock (17,10) through 12 o'clock (10,6).
+        // Arrowhead at the 12 o'clock apex, wings straddling the arc on both sides.
+        const ARROW_STBD = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,10 A 8,8 0 0 1 17,10" stroke="${STBD_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="14,6 10,2.5 10,9.5" fill="${STBD_COLOR}"/></svg>`;
+        const ARROW_PORT = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,10 A 8,8 0 0 1 17,10" stroke="${PORT_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="6,6 10,2.5 10,9.5" fill="${PORT_COLOR}"/></svg>`;
         html += `<table class="twd-table">
           <thead><tr>
             <th>Time (UTC)</th>
+            <th></th>
             <th>Port TWD</th>
             <th>Starboard TWD</th>
             <th>Shift</th>
@@ -658,11 +667,13 @@ const App = (() => {
           const shift = normalizeAngle(t.portTwd - t.stbdTwd);
           const shiftStr = (shift >= 0 ? '+' : '') + shift.toFixed(1) + '°';
           const rowStyle = t.unstable ? ' style="color:#ef9a9a"' : '';
+          const glStyle = t.glUnreliable ? ' style="color:#ef9a9a"' : '';
           const groundLostCell = showGroundLost
-            ? `<td>${t.groundLost !== null ? t.groundLost.toFixed(1) + ' m' : '—'}</td>`
+            ? `<td${glStyle}>${t.groundLost !== null ? t.groundLost.toFixed(1) + ' m' : '—'}</td>`
             : '';
           html += `<tr${rowStyle}>
             <td>${hms}</td>
+            <td style="text-align:center;padding:5px 8px">${t.turnedToStarboard ? ARROW_STBD : ARROW_PORT}</td>
             <td>${t.portTwd.toFixed(1)}°</td>
             <td>${t.stbdTwd.toFixed(1)}°</td>
             <td>${shiftStr}</td>
@@ -674,7 +685,11 @@ const App = (() => {
       html += `</div>`;
     }
     el.innerHTML = html;
-    renderTackVmgChart(allProfiles);
+    renderTackVmgChart(allProfiles,
+      'tack-vmg-canvas',
+      'Time relative to tack (s)',
+      'No tacks detected — upload a log with upwind sailing',
+      'Tack');
   }
 
   function computeTackSegments(entry) {
@@ -705,6 +720,135 @@ const App = (() => {
     return segments;
   }
 
+  // ── Gybe analysis ────────────────────────────────────────────────────────────
+
+  function detectGybes(entry) {
+    const series = getFieldSeries(entry, 'TWA');
+    if (!series || series.length < 2) return [];
+
+    const { trimStart, trimEnd } = Playback.getState();
+    const MIN_INTERVAL = 30000;
+    const gybes = [];
+    let lastGybeTs = -Infinity;
+
+    for (let i = 1; i < series.length; i++) {
+      const prev = series[i - 1];
+      const curr = series[i];
+      if (curr.ts < trimStart || prev.ts > trimEnd) continue;
+      if (Math.abs(prev.val) < 90 || Math.abs(curr.val) < 90) continue;
+      if (prev.val * curr.val >= 0) continue;
+
+      const frac   = (180 - Math.abs(prev.val)) / ((180 - Math.abs(prev.val)) + (180 - Math.abs(curr.val)));
+      const gybeTs = prev.ts + frac * (curr.ts - prev.ts);
+      if (gybeTs - lastGybeTs < MIN_INTERVAL) continue;
+      const prevGybeTs = lastGybeTs;
+      lastGybeTs = gybeTs;
+
+      // prev.val > 0 = was on starboard gybe → gybe turns to port; < 0 → turns to starboard
+      const wasOnStarboard    = prev.val > 0;
+      const turnedToStarboard = !wasOnStarboard;
+
+      const before = twdWindowStats(entry, gybeTs + TACK_PRE_FROM,  gybeTs + TACK_PRE_TO);
+      const after  = twdWindowStats(entry, gybeTs + TACK_POST_FROM, gybeTs + TACK_POST_TO);
+      if (before === null || after === null) continue;
+
+      const preMean  = avgVmgInWindow(entry, gybeTs + TACK_PRE_FROM, gybeTs + TACK_PRE_TO);
+      const integral = integrateVmg(entry, gybeTs + TACK_INT_FROM, gybeTs + TACK_INT_TO);
+      // Downwind VMG is negative; negate formula so positive = ground lost downwind
+      const groundLost = (preMean !== null && integral !== null)
+        ? (integral - preMean * TACK_INT_S) * 0.5144
+        : null;
+
+      const profile = [];
+      const slice = sliceSeriesByTs(series, gybeTs + TACK_PRE_FROM, gybeTs + TACK_POST_TO);
+      for (const { ts } of slice) {
+        const v = vmgAt(entry, ts);
+        if (v !== null) profile.push({ t: (ts - gybeTs) / 1000, vmg: -v }); // negate: downwind VMG is negative, chart shows positive progress
+      }
+
+      gybes.push({
+        ts:               gybeTs,
+        portTwd:          wasOnStarboard ? after.mean  : before.mean,
+        stbdTwd:          wasOnStarboard ? before.mean : after.mean,
+        unstable:         before.range > 10 || after.range > 10,
+        glUnreliable:     prevGybeTs !== -Infinity && (gybeTs - prevGybeTs < TACK_INT_TO - TACK_PRE_FROM),
+        turnedToStarboard,
+        groundLost,
+        profile,
+      });
+    }
+    return gybes;
+  }
+
+  function renderGybeTable() {
+    const el = document.getElementById('gybe-content');
+    if (boats.size === 0) {
+      el.innerHTML = '<p class="twd-empty">No log files loaded.</p>';
+      renderTackVmgChart([], 'gybe-vmg-canvas', 'Time relative to gybe (s)', 'No gybes detected — upload a log with downwind sailing', 'Gybe');
+      return;
+    }
+    let html = '';
+    const allProfiles = [];
+    for (const [, entry] of boats) {
+      const gybes = detectGybes(entry);
+      html += `<div class="twd-boat-section">`;
+      html += `<div class="twd-boat-header">
+        <span class="boat-dot" style="background:${entry.boat.color}"></span>
+        ${entry.boat.name}
+      </div>`;
+      for (const g of gybes) {
+        if (g.profile.length > 1) allProfiles.push({ color: entry.boat.color, points: g.profile, baseline: null });
+      }
+
+      if (gybes.length === 0) {
+        html += `<p class="twd-empty">No gybes detected in the selected range.</p>`;
+      } else {
+        const showGroundLost = gybes.some(g => g.groundLost !== null);
+        // Bottom-arc arrows: arc from (3,4) to (17,4) through bottom apex (10,12), CCW (sweep=0)
+        // Arrowhead at (10,12): tip at (10,14.5), inner wing at (10,9.5), outer wing left or right
+        const ARROW_STBD = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,4 A 8,8 0 0 0 17,4" stroke="${STBD_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="13.5,12 10,9.5 10,14.5" fill="${STBD_COLOR}"/></svg>`;
+        const ARROW_PORT = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,4 A 8,8 0 0 0 17,4" stroke="${PORT_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="6.5,12 10,9.5 10,14.5" fill="${PORT_COLOR}"/></svg>`;
+        html += `<table class="twd-table">
+          <thead><tr>
+            <th>Time (UTC)</th>
+            <th></th>
+            <th>Port TWD</th>
+            <th>Starboard TWD</th>
+            <th>Shift</th>
+            ${showGroundLost ? '<th>Ground Lost</th>' : ''}
+          </tr></thead><tbody>`;
+        for (const g of gybes) {
+          const d   = new Date(g.ts);
+          const hms = [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()]
+                        .map(n => String(n).padStart(2, '0')).join(':');
+          const shift = normalizeAngle(g.portTwd - g.stbdTwd);
+          const shiftStr = (shift >= 0 ? '+' : '') + shift.toFixed(1) + '°';
+          const rowStyle = g.unstable ? ' style="color:#ef9a9a"' : '';
+          const glStyle = g.glUnreliable ? ' style="color:#ef9a9a"' : '';
+          const groundLostCell = showGroundLost
+            ? `<td${glStyle}>${g.groundLost !== null ? g.groundLost.toFixed(1) + ' m' : '—'}</td>`
+            : '';
+          html += `<tr${rowStyle}>
+            <td>${hms}</td>
+            <td style="text-align:center;padding:5px 8px">${g.turnedToStarboard ? ARROW_STBD : ARROW_PORT}</td>
+            <td>${g.portTwd.toFixed(1)}°</td>
+            <td>${g.stbdTwd.toFixed(1)}°</td>
+            <td>${shiftStr}</td>
+            ${groundLostCell}
+          </tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+      html += `</div>`;
+    }
+    el.innerHTML = html;
+    renderTackVmgChart(allProfiles,
+      'gybe-vmg-canvas',
+      'Time relative to gybe (s)',
+      'No gybes detected — upload a log with downwind sailing',
+      'Gybe');
+  }
+
   // ── Playback callbacks ────────────────────────────────────────────────────────
 
   function onTick(ts) {
@@ -723,7 +867,8 @@ const App = (() => {
     }
     updateScrubberRange();
     if (currentView === 'beating') Analysis.render(collectUpwindData());
-    if (currentView === 'twd') renderTwdTable();
+    if (currentView === 'twd')  renderTwdTable();
+    if (currentView === 'gybe') renderGybeTable();
     if (windBarbsVisible) refreshWindBarbs();
   }
 
@@ -756,7 +901,8 @@ const App = (() => {
         for (const [, entry] of boats) MapManager.clearTrim(entry.boat);
         onTick(st.currentTs);
         if (currentView === 'beating') Analysis.render(collectUpwindData());
-        if (currentView === 'twd') renderTwdTable();
+        if (currentView === 'twd')  renderTwdTable();
+        if (currentView === 'gybe') renderGybeTable();
         renderBoatList();
         renderVariablePanel();
         updateAddVarDropdown();
