@@ -454,6 +454,24 @@ body {
   padding: 12px 0;
 }
 
+/* Gybe analysis view */
+#gybe-vmg-canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+  flex-shrink: 0;
+}
+#gybe-container {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 0;
+}
+#gybe-content {
+  padding: 20px 24px;
+  max-width: 680px;
+}
+
 /* Tack colour toggle */
 #btn-tack-color { flex-shrink: 0; }
 #btn-tack-color.active { background: var(--success); color: #fff; }

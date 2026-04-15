@@ -14,8 +14,9 @@
     <h1>⛵ Sailing Analysis</h1>
     <nav class="view-tabs">
       <button id="tab-map"     class="tab-btn active">Map</button>
-      <button id="tab-beating" class="tab-btn">Beating</button>
-      <button id="tab-twd"     class="tab-btn">TWD</button>
+      <button id="tab-beating" class="tab-btn">Upwind Polars</button>
+      <button id="tab-twd"     class="tab-btn">Tacking</button>
+      <button id="tab-gybe"    class="tab-btn">Gybing</button>
     </nav>
     <label class="upload-btn" title="Upload Expedition CSV log files">
       + Upload Files
@@ -47,6 +48,12 @@
     <div id="twd-container" class="view-hidden">
       <canvas id="tack-vmg-canvas"></canvas>
       <div id="twd-content"></div>
+    </div>
+
+    <!-- Analysis (Gybing) -->
+    <div id="gybe-container" class="view-hidden">
+      <canvas id="gybe-vmg-canvas"></canvas>
+      <div id="gybe-content"></div>
     </div>
 
     <!-- Sidebar -->
