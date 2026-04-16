@@ -26,8 +26,11 @@ const App = (() => {
   // All field names seen across all uploaded boats (name → fieldId in first boat that has it)
   const allFieldNames = new Map();
 
-  // Active view: 'map' | 'beating' | 'twd' | 'gybe'
+  // Active view: 'map' | 'beating' | 'twd' | 'gybe' | 'graph'
   let currentView = 'map';
+
+  // Variables plotted in the Graph tab
+  let graphVars = ['TWS'];
 
   // Whether track is coloured by tack
   let tackColorMode = false;
@@ -75,12 +78,14 @@ const App = (() => {
 
     MapManager.init();
     Analysis.init();
+    Graph.init();
 
     // View tabs
     document.getElementById('tab-map').addEventListener('click', () => switchView('map'));
     document.getElementById('tab-beating').addEventListener('click', () => switchView('beating'));
     document.getElementById('tab-twd').addEventListener('click', () => switchView('twd'));
     document.getElementById('tab-gybe').addEventListener('click', () => switchView('gybe'));
+    document.getElementById('tab-graph').addEventListener('click', () => switchView('graph'));
 
     // Populate speed selector
     Playback.SPEEDS.forEach(s => {
@@ -173,6 +178,7 @@ const App = (() => {
     elBtnModalOk.addEventListener('click', confirmBoatName);
     elBoatNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmBoatName(); });
 
+    renderGraphControls();
     switchView('map');
   }
 
@@ -233,8 +239,10 @@ const App = (() => {
     if (currentView === 'beating') Analysis.render(collectUpwindData());
     if (currentView === 'twd')  renderTwdTable();
     if (currentView === 'gybe') renderGybeTable();
+    if (currentView === 'graph') Graph.render(collectGraphData());
 
     recalcPlaybackRange();
+    renderGraphControls();
     if (windBarbsVisible) MapManager.showWindBarbs(boat, computeWindBarbs(boats.get(boat.name)));
 
     // Show the UI
@@ -368,15 +376,18 @@ const App = (() => {
     document.getElementById('tab-beating').classList.toggle('active', view === 'beating');
     document.getElementById('tab-twd').classList.toggle('active', view === 'twd');
     document.getElementById('tab-gybe').classList.toggle('active', view === 'gybe');
+    document.getElementById('tab-graph').classList.toggle('active', view === 'graph');
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
     document.getElementById('gybe-container').classList.toggle('view-hidden', view !== 'gybe');
+    document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
     if (view === 'map')     MapManager.invalidateSize();
     if (view === 'beating') Analysis.render(collectUpwindData());
     if (view === 'twd')  renderTwdTable();
     if (view === 'gybe') renderGybeTable();
+    if (view === 'graph') Graph.render(collectGraphData());
   }
 
   function collectUpwindData() {
@@ -870,6 +881,81 @@ const App = (() => {
       'Gybe');
   }
 
+  // ── Graph tab ─────────────────────────────────────────────────────────────────
+
+  function collectGraphData() {
+    const { trimStart, trimEnd, currentTs } = Playback.getState();
+    return {
+      trimStart, trimEnd, currentTs,
+      series: graphVars.map(varName => ({
+        varName,
+        unit: UNITS[varName] || '',
+        boats: [...boats.values()]
+          .map(entry => {
+            const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], trimStart, trimEnd);
+            const avg = pts.length > 0
+              ? pts.reduce((s, p) => s + p.val, 0) / pts.length
+              : null;
+            return { name: entry.boat.name, color: entry.boat.color, points: pts, avg };
+          })
+          .filter(b => b.points.length > 0),
+      })),
+    };
+  }
+
+  function renderGraphControls() {
+    const el = document.getElementById('graph-controls');
+    el.innerHTML = '';
+
+    // Variable chips
+    for (const varName of graphVars) {
+      const chip = document.createElement('span');
+      chip.className = 'graph-var-chip';
+
+      const label = document.createElement('span');
+      label.textContent = varName;
+
+      const btn = document.createElement('button');
+      btn.textContent = '×';
+      btn.title = 'Remove';
+      btn.addEventListener('click', () => {
+        graphVars = graphVars.filter(v => v !== varName);
+        renderGraphControls();
+        if (currentView === 'graph') Graph.render(collectGraphData());
+      });
+
+      chip.appendChild(label);
+      chip.appendChild(btn);
+      el.appendChild(chip);
+    }
+
+    // Add variable dropdown
+    const sel = document.createElement('select');
+    sel.style.cssText = 'background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '+ Add variable';
+    sel.appendChild(placeholder);
+    const sorted = [...allFieldNames.keys()].sort();
+    for (const name of sorted) {
+      if (!graphVars.includes(name)) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      }
+    }
+    sel.addEventListener('change', () => {
+      const name = sel.value;
+      if (name && !graphVars.includes(name)) {
+        graphVars.push(name);
+        renderGraphControls();
+        if (currentView === 'graph') Graph.render(collectGraphData());
+      }
+    });
+    el.appendChild(sel);
+  }
+
   // ── Playback callbacks ────────────────────────────────────────────────────────
 
   function onTick(ts) {
@@ -880,6 +966,7 @@ const App = (() => {
     updateVariableValues(ts);
     updateScrubber(ts);
     updateTimeDisplay(ts);
+    if (currentView === 'graph') Graph.updateCursor(ts);
   }
 
   function onTrimChange(start, end) {
@@ -891,6 +978,7 @@ const App = (() => {
     if (currentView === 'beating') Analysis.render(collectUpwindData());
     if (currentView === 'twd')  renderTwdTable();
     if (currentView === 'gybe') renderGybeTable();
+    if (currentView === 'graph') Graph.render(collectGraphData());
     if (windBarbsVisible) refreshWindBarbs();
   }
 
@@ -931,9 +1019,11 @@ const App = (() => {
         if (currentView === 'beating') Analysis.render(collectUpwindData());
         if (currentView === 'twd')  renderTwdTable();
         if (currentView === 'gybe') renderGybeTable();
+        if (currentView === 'graph') Graph.render(collectGraphData());
         renderBoatList();
         renderVariablePanel();
         updateAddVarDropdown();
+        renderGraphControls();
       });
 
       div.appendChild(dot);
