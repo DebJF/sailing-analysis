@@ -454,6 +454,25 @@ body {
   padding: 12px 0;
 }
 
+.twd-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 12px;
+  margin-top: 2px;
+  background: var(--panel2);
+  border-radius: 4px;
+}
+.twd-summary strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.twd-summary-sep {
+  opacity: 0.4;
+}
+
 /* Gybe analysis view */
 #gybe-vmg-canvas {
   display: block;

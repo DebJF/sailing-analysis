@@ -102,9 +102,9 @@ const Playback = (() => {
   }
 
   function clearTrim() {
-    state.trimStart = state.minTs;
-    state.trimEnd   = state.maxTs;
-    if (_onTrimChange) _onTrimChange(state.trimStart, state.trimEnd);
+    state.trimStart = null;
+    state.trimEnd   = null;
+    if (_onTrimChange) _onTrimChange(null, null);
   }
 
   function _tick() {

@@ -26,7 +26,7 @@ const App = (() => {
   // All field names seen across all uploaded boats (name → fieldId in first boat that has it)
   const allFieldNames = new Map();
 
-  // Active view: 'map' | 'beating'
+  // Active view: 'map' | 'beating' | 'twd' | 'gybe'
   let currentView = 'map';
 
   // Whether track is coloured by tack
@@ -121,7 +121,7 @@ const App = (() => {
     elBtnTrimEnd.addEventListener('click',   () => Playback.setTrimEnd());
     elBtnClearTrim.addEventListener('click', () => {
       Playback.clearTrim();
-      for (const [, entry] of boats) MapManager.clearTrim(entry.boat);
+      // MapManager updates happen via the onTrimChange(null, null) callback
     });
 
     elScrubber.addEventListener('input', () => {
@@ -251,12 +251,12 @@ const App = (() => {
 
   function buildFieldTimeseries(boat) {
     // fieldId → [{ts, val}] sorted by ts (rows are already sorted)
-    const map = {};
+    const map = new Map();
     for (const row of boat.rows) {
       for (const [fid, val] of Object.entries(row.fields)) {
         const id = parseInt(fid, 10);
-        if (!map[id]) map[id] = [];
-        map[id].push({ ts: row.ts, val });
+        if (!map.has(id)) map.set(id, []);
+        map.get(id).push({ ts: row.ts, val });
       }
     }
     return map;
@@ -265,7 +265,7 @@ const App = (() => {
   function getFieldValue(entry, fieldName, ts) {
     const fieldId = entry.boat.nameToId[fieldName];
     if (fieldId === undefined) return null;
-    const series = entry.fieldTimeseries[fieldId];
+    const series = entry.fieldTimeseries.get(fieldId);
     if (!series || series.length === 0) return null;
     return carryForward(series, ts);
   }
@@ -273,7 +273,7 @@ const App = (() => {
   function getFieldSeries(entry, fieldName) {
     const fieldId = entry.boat.nameToId[fieldName];
     if (fieldId === undefined) return null;
-    return entry.fieldTimeseries[fieldId] || null;
+    return entry.fieldTimeseries.get(fieldId) || null;
   }
 
   function vmgAt(entry, ts) {
@@ -346,7 +346,12 @@ const App = (() => {
   }
 
   function recalcPlaybackRange() {
-    if (boats.size === 0) { Playback.setRange(0, 0); return; }
+    if (boats.size === 0) {
+      elEmptyOverlay.classList.remove('hidden');
+      Playback.pause();
+      Playback.setRange(0, 0);
+      return;
+    }
     let minTs = Infinity, maxTs = -Infinity;
     for (const [, entry] of boats) {
       minTs = Math.min(minTs, entry.boat.minTs);
@@ -646,9 +651,6 @@ const App = (() => {
       } else {
         const showGroundLost = tacks.some(t => t.groundLost !== null);
         // SVG semicircle arrows between 10 o'clock and 2 o'clock positions.
-        // Same arc shape; arrowhead at 2 o'clock end = starboard (clockwise), at 10 o'clock end = port.
-        // Arc from 10 o'clock (3,10) to 2 o'clock (17,10) through 12 o'clock (10,6).
-        // Arrowhead at the 12 o'clock apex, wings straddling the arc on both sides.
         const ARROW_STBD = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,10 A 8,8 0 0 1 17,10" stroke="${STBD_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="14,6 10,2.5 10,9.5" fill="${STBD_COLOR}"/></svg>`;
         const ARROW_PORT = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,10 A 8,8 0 0 1 17,10" stroke="${PORT_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="6,6 10,2.5 10,9.5" fill="${PORT_COLOR}"/></svg>`;
         html += `<table class="twd-table">
@@ -681,6 +683,26 @@ const App = (() => {
           </tr>`;
         }
         html += `</tbody></table>`;
+
+        // Summary row
+        const shifts = tacks.map(t => normalizeAngle(t.portTwd - t.stbdTwd));
+        const avgShift = shifts.reduce((s, v) => s + v, 0) / shifts.length;
+        const twaCorrStr = (avgShift / 2 >= 0 ? '+' : '') + (avgShift / 2).toFixed(1) + '°';
+        const glValues = tacks.filter(t => t.groundLost !== null).map(t => t.groundLost);
+        const avgGl = glValues.length > 0 ? (glValues.reduce((s, v) => s + v, 0) / glValues.length).toFixed(1) + ' m' : null;
+        const { trimStart, trimEnd } = Playback.getState();
+        const twsSeries = getFieldSeries(entry, 'TWS');
+        const twsSlice = twsSeries ? sliceSeriesByTs(twsSeries, trimStart, trimEnd) : [];
+        const avgTws = twsSlice.length > 0
+          ? (twsSlice.reduce((s, p) => s + p.val, 0) / twsSlice.length).toFixed(1) + ' kts'
+          : null;
+        html += `<div class="twd-summary">
+          <span>${tacks.length} tack${tacks.length !== 1 ? 's' : ''}</span>
+          <span class="twd-summary-sep">·</span>
+          <span>TWA correction: <strong>${twaCorrStr}</strong></span>
+          ${avgGl !== null ? `<span class="twd-summary-sep">·</span><span>Avg ground lost: <strong>${avgGl}</strong></span>` : ''}
+          ${avgTws !== null ? `<span class="twd-summary-sep">·</span><span>Avg TWS: <strong>${avgTws}</strong></span>` : ''}
+        </div>`;
       }
       html += `</div>`;
     }
@@ -804,8 +826,7 @@ const App = (() => {
         html += `<p class="twd-empty">No gybes detected in the selected range.</p>`;
       } else {
         const showGroundLost = gybes.some(g => g.groundLost !== null);
-        // Bottom-arc arrows: arc from (3,4) to (17,4) through bottom apex (10,12), CCW (sweep=0)
-        // Arrowhead at (10,12): tip at (10,14.5), inner wing at (10,9.5), outer wing left or right
+        // Bottom-arc arrows
         const ARROW_STBD = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,4 A 8,8 0 0 0 17,4" stroke="${STBD_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="13.5,12 10,9.5 10,14.5" fill="${STBD_COLOR}"/></svg>`;
         const ARROW_PORT = `<svg width="20" height="14" viewBox="0 0 20 14" style="vertical-align:middle"><path d="M 3,4 A 8,8 0 0 0 17,4" stroke="${PORT_COLOR}" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="6.5,12 10,9.5 10,14.5" fill="${PORT_COLOR}"/></svg>`;
         html += `<table class="twd-table">
@@ -863,7 +884,8 @@ const App = (() => {
 
   function onTrimChange(start, end) {
     for (const [, entry] of boats) {
-      MapManager.setTrim(entry.boat, start, end);
+      if (start === null) MapManager.clearTrim(entry.boat);
+      else MapManager.setTrim(entry.boat, start, end);
     }
     updateScrubberRange();
     if (currentView === 'beating') Analysis.render(collectUpwindData());
@@ -884,21 +906,27 @@ const App = (() => {
     for (const [, entry] of boats) {
       const div = document.createElement('div');
       div.className = 'boat-item';
-      div.innerHTML = `
-        <span class="boat-dot" style="background:${entry.boat.color}"></span>
-        <span class="boat-name">${entry.boat.name}</span>
-        <button class="btn-remove-boat" data-name="${entry.boat.name}" title="Remove">×</button>
-      `;
-      elBoatList.appendChild(div);
-    }
-    elBoatList.querySelectorAll('.btn-remove-boat').forEach(btn => {
+
+      const dot = document.createElement('span');
+      dot.className = 'boat-dot';
+      dot.style.background = entry.boat.color;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'boat-name';
+      nameSpan.textContent = entry.boat.name;
+
+      const btn = document.createElement('button');
+      btn.className = 'btn-remove-boat';
+      btn.title = 'Remove';
+      btn.textContent = '×';
+      btn.dataset.name = entry.boat.name;
       btn.addEventListener('click', () => {
         const name = btn.dataset.name;
         MapManager.removeBoat(name);
         boats.delete(name);
         recalcPlaybackRange();
+        for (const [, e] of boats) MapManager.clearTrim(e.boat);
         const st = Playback.getState();
-        for (const [, entry] of boats) MapManager.clearTrim(entry.boat);
         onTick(st.currentTs);
         if (currentView === 'beating') Analysis.render(collectUpwindData());
         if (currentView === 'twd')  renderTwdTable();
@@ -907,7 +935,12 @@ const App = (() => {
         renderVariablePanel();
         updateAddVarDropdown();
       });
-    });
+
+      div.appendChild(dot);
+      div.appendChild(nameSpan);
+      div.appendChild(btn);
+      elBoatList.appendChild(div);
+    }
   }
 
   function renderVariablePanel() {
@@ -915,7 +948,6 @@ const App = (() => {
     const st = Playback.getState();
 
     for (const varName of displayedVars) {
-      const unit = UNITS[varName] || '';
       const row = document.createElement('div');
       row.className = 'var-row';
 
@@ -936,16 +968,20 @@ const App = (() => {
 
       const values = document.createElement('span');
       values.className = 'var-values';
-      values.id = `varval-${cssId(varName)}`;
 
-      // Populate current values
-      const boatVals = [];
-      for (const [, entry] of boats) {
-        const v = getFieldValue(entry, varName, st.currentTs);
-        const formatted = v !== null ? formatVal(v, varName) + (unit ? '\u00a0' + unit : '') : '—';
-        boatVals.push(`<span class="var-dot" style="background:${entry.boat.color}"></span><span class="var-num">${formatted}</span>`);
+      for (const [boatName, entry] of boats) {
+        const dot = document.createElement('span');
+        dot.className = 'var-dot';
+        dot.style.background = entry.boat.color;
+
+        const num = document.createElement('span');
+        num.className = 'var-num';
+        num.id = `varnum-${cssId(varName)}-${cssId(boatName)}`;
+        num.textContent = formatVarValue(getFieldValue(entry, varName, st.currentTs), varName);
+
+        values.appendChild(dot);
+        values.appendChild(num);
       }
-      values.innerHTML = boatVals.join('');
 
       row.appendChild(checkbox);
       row.appendChild(label);
@@ -956,16 +992,11 @@ const App = (() => {
 
   function updateVariableValues(ts) {
     for (const varName of displayedVars) {
-      const el = document.getElementById(`varval-${cssId(varName)}`);
-      if (!el) continue;
-      const unit = UNITS[varName] || '';
-      const boatVals = [];
-      for (const [, entry] of boats) {
-        const v = getFieldValue(entry, varName, ts);
-        const formatted = v !== null ? formatVal(v, varName) + (unit ? '\u00a0' + unit : '') : '—';
-        boatVals.push(`<span class="var-dot" style="background:${entry.boat.color}"></span><span class="var-num">${formatted}</span>`);
+      for (const [boatName, entry] of boats) {
+        const el = document.getElementById(`varnum-${cssId(varName)}-${cssId(boatName)}`);
+        if (!el) continue;
+        el.textContent = formatVarValue(getFieldValue(entry, varName, ts), varName);
       }
-      el.innerHTML = boatVals.join('');
     }
   }
 
@@ -1007,10 +1038,11 @@ const App = (() => {
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
-  function formatVal(v, fieldName) {
+  function formatVarValue(v, fieldName) {
+    if (v === null) return '—';
     const unit = UNITS[fieldName] || '';
-    if (unit === '°' || unit === '%') return v.toFixed(0);
-    return v.toFixed(1);
+    const num = (unit === '°' || unit === '%') ? v.toFixed(0) : v.toFixed(1);
+    return unit ? num + '\u00a0' + unit : num;
   }
 
   function cssId(name) {
