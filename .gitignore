@@ -1,1 +1,14 @@
 node_modules/
+.vercel/
+.claude/
+
+# Sailing log data files (large, not source code)
+log files/
+
+# Generated output files
+track.html
+twd-around-tacks.html
+
+# One-off Node.js scripts (not part of the web app)
+twd-plot.js
+visualise_track.js
