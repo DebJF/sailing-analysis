@@ -951,33 +951,31 @@ const App = (() => {
       if (!series) return null;
       let slice = sliceSeriesByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
-      // Exclude tack maneuver windows from angle averages
       if (row.mode === 'avgAbs' && tacks && tacks.length > 0) {
         slice = slice.filter(p => !tacks.some(
           t => p.ts >= t.ts + TACK_INT_FROM && p.ts <= t.ts + TACK_INT_TO
         ));
         if (slice.length === 0) return null;
       }
-      const sum = slice.reduce((s, p) => s + (row.mode === 'avgAbs' ? Math.abs(p.val) : p.val), 0);
-      return sum / slice.length;
+      const vals = slice.map(p => row.mode === 'avgAbs' ? Math.abs(p.val) : p.val);
+      const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+      const sd   = vals.length > 1
+        ? Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length)
+        : 0;
+      return { mean, sd };
     }
     if (row.mode === 'circular') {
-      const stats = twdWindowStats(entry, startTs, endTs);
-      return stats ? stats.mean : null;
-    }
-    if (row.mode === 'polBsp') {
-      // target polar BSP = actual BSP / (Pol0% / 100)
-      const bspSeries = getFieldSeries(entry, 'BSP');
-      const polSeries = getFieldSeries(entry, 'Pol0%');
-      if (!bspSeries || !polSeries) return null;
-      const slice = sliceSeriesByTs(bspSeries, startTs, endTs);
+      const series = getFieldSeries(entry, row.key);
+      if (!series) return null;
+      const slice = sliceSeriesByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
-      let sum = 0, count = 0;
-      for (const { ts, val: bsp } of slice) {
-        const pol = carryForward(polSeries, ts);
-        if (pol !== null && pol > 0) { sum += bsp * 100 / pol; count++; }
-      }
-      return count > 0 ? sum / count : null;
+      const vals = slice.map(p => p.val);
+      const mean = circularMean(vals);
+      if (mean === null) return null;
+      const sd = vals.length > 1
+        ? Math.sqrt(vals.reduce((s, v) => s + normalizeAngle(v - mean) ** 2, 0) / vals.length)
+        : 0;
+      return { mean, sd };
     }
     return null;
   }
@@ -1016,10 +1014,10 @@ const App = (() => {
     elStatsContent.innerHTML = html;
   }
 
-  function formatStat(val, unit) {
-    if (val === null) return '—';
+  function formatStat(stat, unit) {
+    if (stat === null) return '—';
     const dp = unit === 'kts' ? 2 : 1;
-    return val.toFixed(dp) + '\u00a0' + unit;
+    return `${stat.mean.toFixed(dp)}\u00a0${unit} <span class="stats-sd">(±${stat.sd.toFixed(dp)})</span>`;
   }
 
   // ── Graph tab ─────────────────────────────────────────────────────────────────
