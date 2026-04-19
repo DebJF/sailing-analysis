@@ -24,7 +24,7 @@ const App = (() => {
     { key: 'AWA',   label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg'      },
     { key: 'PolBsp', label: 'PolBsp',    unit: 'kts', mode: 'avg'      },
-    { key: 'Pol0%', label: 'Pol%',      unit: '%',   mode: 'avg'      },
+    { key: 'Pol0%', label: 'PolBsp%',   unit: '%',   mode: 'avg'      },
     { key: 'VMG',   label: 'VMG',       unit: 'kts', mode: 'avg'      },
     { key: 'VMG%',  label: 'VMG%',      unit: '%',   mode: 'avg'      },
   ];
