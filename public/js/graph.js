@@ -16,12 +16,52 @@ const Graph = (() => {
   let canvas = null;
   let offscreen = null; // stored base image (no cursor)
   let _lastData = null;
+  let _onClick = null;
 
-  function init() {
+  function init({ onClick } = {}) {
+    _onClick = onClick || null;
     canvas = document.getElementById('graph-canvas');
     new ResizeObserver(() => {
       if (_lastData) render(_lastData);
     }).observe(canvas);
+    canvas.addEventListener('click', handleCanvasClick);
+    canvas.addEventListener('mousemove', handleCanvasMouseMove);
+    canvas.addEventListener('mouseleave', () => { canvas.style.cursor = ''; });
+  }
+
+  function _bandLayout() {
+    if (!_lastData) return null;
+    const n = _lastData.series.length;
+    if (n === 0) return null;
+    const H = canvas.offsetHeight;
+    const plotH = H - M.top - M.bottom;
+    const bandH = (plotH - GAP * (n - 1)) / n;
+    return { n, bandH };
+  }
+
+  function _hitTestLabel(cx, cy) {
+    if (cx >= M.left) return -1;
+    const layout = _bandLayout();
+    if (!layout) return -1;
+    const { n, bandH } = layout;
+    for (let i = 0; i < n; i++) {
+      const bandTop = M.top + i * (bandH + GAP);
+      if (cy >= bandTop && cy <= bandTop + bandH) return i;
+    }
+    return -1;
+  }
+
+  function handleCanvasClick(e) {
+    if (!_onClick || !_lastData) return;
+    const rect = canvas.getBoundingClientRect();
+    const i = _hitTestLabel(e.clientX - rect.left, e.clientY - rect.top);
+    if (i >= 0) _onClick(_lastData.series[i].varName, e.clientX, e.clientY);
+  }
+
+  function handleCanvasMouseMove(e) {
+    if (!_lastData) { canvas.style.cursor = ''; return; }
+    const rect = canvas.getBoundingClientRect();
+    canvas.style.cursor = _hitTestLabel(e.clientX - rect.left, e.clientY - rect.top) >= 0 ? 'pointer' : '';
   }
 
   // ── Public API ────────────────────────────────────────────────────────────────
@@ -101,12 +141,19 @@ const Graph = (() => {
       : s.boats.flatMap(b => b.points.map(p => p.val));
     if (allVals.length === 0) return;
 
-    let yMin = Math.min(...allVals);
-    let yMax = Math.max(...allVals);
-    if (yMin === yMax) { yMin -= 1; yMax += 1; }
-    const pad = (yMax - yMin) * 0.1;
-    yMin -= pad;
-    yMax += pad;
+    const isManual = s.scale && s.scale.mode === 'manual';
+    let yMin, yMax;
+    if (isManual) {
+      yMin = s.scale.min;
+      yMax = s.scale.max;
+    } else {
+      yMin = Math.min(...allVals);
+      yMax = Math.max(...allVals);
+      if (yMin === yMax) { yMin -= 1; yMax += 1; }
+      const pad = (yMax - yMin) * 0.1;
+      yMin -= pad;
+      yMax += pad;
+    }
 
     const toY = v => bandTop + (1 - (v - yMin) / (yMax - yMin)) * bandH;
 
@@ -134,7 +181,7 @@ const Graph = (() => {
     const varDisplay = s.absTack ? `|${s.varName}|` : s.varName;
     const label = s.unit ? `${varDisplay} (${s.unit})` : varDisplay;
     ctx.save();
-    ctx.fillStyle = TITLE;
+    ctx.fillStyle = isManual ? '#1e88e5' : TITLE;
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';

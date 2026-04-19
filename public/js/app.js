@@ -36,6 +36,9 @@ const App = (() => {
   // Subset of graphVars currently in abs+tack-color mode (AWA/TWA only)
   let absTackVars = new Set();
 
+  // varName → { mode: 'auto' } | { mode: 'manual', min, max }
+  const graphScales = new Map();
+
   // Whether track is coloured by tack
   let tackColorMode = false;
 
@@ -82,7 +85,7 @@ const App = (() => {
 
     MapManager.init();
     Analysis.init();
-    Graph.init();
+    Graph.init({ onClick: handleGraphLabelClick });
 
     // View tabs
     document.getElementById('tab-map').addEventListener('click', () => switchView('map'));
@@ -887,6 +890,58 @@ const App = (() => {
 
   // ── Graph tab ─────────────────────────────────────────────────────────────────
 
+  function handleGraphLabelClick(varName, clientX, clientY) {
+    const existing = document.getElementById('graph-scale-popup');
+    if (existing) existing.remove();
+
+    const current = graphScales.get(varName) || { mode: 'auto' };
+
+    const popup = document.createElement('div');
+    popup.id = 'graph-scale-popup';
+    popup.className = 'graph-scale-popup';
+    popup.style.left = clientX + 8 + 'px';
+    popup.style.top  = clientY - 16 + 'px';
+
+    const autoBtn = document.createElement('button');
+    autoBtn.textContent = 'Auto';
+    autoBtn.className = current.mode === 'auto' ? 'active' : '';
+    autoBtn.addEventListener('click', () => {
+      graphScales.delete(varName);
+      popup.remove();
+      if (currentView === 'graph') Graph.render(collectGraphData());
+    });
+
+    const manualBtn = document.createElement('button');
+    manualBtn.textContent = 'Manual';
+    manualBtn.className = current.mode === 'manual' ? 'active' : '';
+    manualBtn.addEventListener('click', () => {
+      popup.remove();
+      const defMin = current.mode === 'manual' ? current.min : '';
+      const defMax = current.mode === 'manual' ? current.max : '';
+      const minStr = window.prompt(`${varName} — lower limit:`, defMin);
+      if (minStr === null) return;
+      const maxStr = window.prompt(`${varName} — upper limit:`, defMax);
+      if (maxStr === null) return;
+      const min = parseFloat(minStr);
+      const max = parseFloat(maxStr);
+      if (isNaN(min) || isNaN(max) || min >= max) {
+        alert('Invalid limits — enter two numbers where lower < upper.');
+        return;
+      }
+      graphScales.set(varName, { mode: 'manual', min, max });
+      if (currentView === 'graph') Graph.render(collectGraphData());
+    });
+
+    popup.appendChild(autoBtn);
+    popup.appendChild(manualBtn);
+    document.body.appendChild(popup);
+
+    const close = e => {
+      if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('mousedown', close); }
+    };
+    setTimeout(() => document.addEventListener('mousedown', close), 0);
+  }
+
   function collectGraphData() {
     const { trimStart, trimEnd, currentTs } = Playback.getState();
     return {
@@ -897,6 +952,7 @@ const App = (() => {
           varName,
           unit: UNITS[varName] || '',
           absTack: isAbsTack,
+          scale: graphScales.get(varName) || { mode: 'auto' },
           boats: [...boats.values()]
             .map(entry => {
               const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], trimStart, trimEnd);
@@ -948,6 +1004,7 @@ const App = (() => {
       btn.addEventListener('click', () => {
         graphVars = graphVars.filter(v => v !== varName);
         absTackVars.delete(varName);
+        graphScales.delete(varName);
         renderGraphControls();
         if (currentView === 'graph') Graph.render(collectGraphData());
       });

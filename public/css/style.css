@@ -545,6 +545,20 @@ body {
   line-height: 1;
 }
 .graph-var-chip button:hover { color: var(--danger); }
+.graph-scale-popup {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+.graph-scale-popup button { width: 80px; text-align: center; }
+.graph-scale-popup button.active { background: var(--accent); color: #fff; }
 .graph-abs-btn { font-size: 10px; padding: 0 3px; }
 .graph-abs-btn:hover { color: var(--text); }
 .graph-abs-btn.active {
