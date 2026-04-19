@@ -40,14 +40,24 @@ const Graph = (() => {
   }
 
   function _hitTestLabel(cx, cy) {
-    if (cx >= M.left) return -1;
     const layout = _bandLayout();
     if (!layout) return -1;
     const { n, bandH } = layout;
-    for (let i = 0; i < n; i++) {
-      const bandTop = M.top + i * (bandH + GAP);
-      if (cy >= bandTop && cy <= bandTop + bandH) return i;
+
+    // Y-axis labels: left margin
+    if (cx < M.left) {
+      for (let i = 0; i < n; i++) {
+        const bandTop = M.top + i * (bandH + GAP);
+        if (cy >= bandTop && cy <= bandTop + bandH) return i;
+      }
+      return -1;
     }
+
+    // X-axis label: bottom margin, within plot width
+    const lastBandBottom = M.top + (n - 1) * (bandH + GAP) + bandH;
+    const plotW = canvas.offsetWidth - M.left - M.right;
+    if (cy > lastBandBottom && cx <= M.left + plotW) return n; // sentinel: n = x-axis
+
     return -1;
   }
 
@@ -55,7 +65,9 @@ const Graph = (() => {
     if (!_onClick || !_lastData) return;
     const rect = canvas.getBoundingClientRect();
     const i = _hitTestLabel(e.clientX - rect.left, e.clientY - rect.top);
-    if (i >= 0) _onClick(_lastData.series[i].varName, e.clientX, e.clientY);
+    if (i < 0) return;
+    const varName = i < _lastData.series.length ? _lastData.series[i].varName : null;
+    _onClick(varName, e.clientX, e.clientY);
   }
 
   function handleCanvasMouseMove(e) {
@@ -85,7 +97,7 @@ const Graph = (() => {
     // Blit to main canvas + draw cursor
     const ctx = canvas.getContext('2d');
     ctx.drawImage(offscreen, 0, 0);
-    if (data.series.length > 0) drawCursor(ctx, W, H, data.currentTs, data.trimStart, data.trimEnd, dpr);
+    if (data.series.length > 0) drawCursor(ctx, W, H, data.currentTs, data.xStart, data.xEnd, dpr);
   }
 
   function updateCursor(ts) {
@@ -95,7 +107,7 @@ const Graph = (() => {
     const H = canvas.offsetHeight;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(offscreen, 0, 0);
-    if (_lastData.series.length > 0) drawCursor(ctx, W, H, ts, _lastData.trimStart, _lastData.trimEnd, dpr);
+    if (_lastData.series.length > 0) drawCursor(ctx, W, H, ts, _lastData.xStart, _lastData.xEnd, dpr);
   }
 
   // ── Drawing ───────────────────────────────────────────────────────────────────
@@ -104,7 +116,7 @@ const Graph = (() => {
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, W, H);
 
-    const { series, trimStart, trimEnd } = data;
+    const { series, xStart, xEnd, xScale } = data;
 
     if (series.length === 0 || series.every(s => s.boats.length === 0)) {
       ctx.fillStyle = LABEL;
@@ -120,24 +132,23 @@ const Graph = (() => {
     const plotH = H - M.top  - M.bottom;
     const bandH = (plotH - GAP * (n - 1)) / n;
 
-    // X helpers
-    const xSpan = trimEnd - trimStart; // ms
-    const toX = ts => M.left + (ts - trimStart) / xSpan * plotW;
-
-    const xInterval = computeXInterval(trimStart, trimEnd);
+    const xSpan = xEnd - xStart;
+    const toX = ts => M.left + (ts - xStart) / xSpan * plotW;
+    const xInterval = computeXInterval(xStart, xEnd);
 
     // Draw each band
     series.forEach((s, i) => {
       const bandTop = M.top + i * (bandH + GAP);
-      drawBand(ctx, s, bandTop, bandH, plotW, toX, trimStart, trimEnd, xInterval);
+      drawBand(ctx, s, bandTop, bandH, plotW, toX, xStart, xEnd, xInterval);
     });
 
     // Shared x-axis at bottom of last band
     const lastBandBottom = M.top + (n - 1) * (bandH + GAP) + bandH;
-    drawXAxis(ctx, W, lastBandBottom, plotW, trimStart, trimEnd, toX, xInterval);
+    const isManualX = xScale && xScale.mode === 'manual';
+    drawXAxis(ctx, W, lastBandBottom, plotW, xStart, xEnd, toX, xInterval, isManualX);
   }
 
-  function drawBand(ctx, s, bandTop, bandH, plotW, toX, trimStart, trimEnd, xInterval) {
+  function drawBand(ctx, s, bandTop, bandH, plotW, toX, xStart, xEnd, xInterval) {
     const allVals = s.absTack
       ? s.boats.flatMap(b => (b.absTackPoints || []).map(p => p.val))
       : s.boats.flatMap(b => b.points.map(p => p.val));
@@ -188,10 +199,10 @@ const Graph = (() => {
 
     // Vertical grid lines (aligned with x-axis ticks)
     if (xInterval) {
-      const firstTick = Math.ceil(trimStart / 1000 / xInterval) * xInterval * 1000;
+      const firstTick = Math.ceil(xStart / 1000 / xInterval) * xInterval * 1000;
       ctx.strokeStyle = GRID;
       ctx.beginPath();
-      for (let ts = firstTick; ts <= trimEnd; ts += xInterval * 1000) {
+      for (let ts = firstTick; ts <= xEnd; ts += xInterval * 1000) {
         const px = toX(ts);
         ctx.moveTo(px, bandTop);
         ctx.lineTo(px, bandTop + bandH);
@@ -306,9 +317,7 @@ const Graph = (() => {
     return interval;
   }
 
-  function drawXAxis(ctx, W, axisY, plotW, trimStart, trimEnd, toX, xInterval) {
-    const interval = xInterval;
-
+  function drawXAxis(ctx, W, axisY, plotW, xStart, xEnd, toX, xInterval, isManualX) {
     // Bottom axis line
     ctx.strokeStyle = LABEL;
     ctx.lineWidth = 1;
@@ -318,18 +327,18 @@ const Graph = (() => {
     ctx.stroke();
 
     // Ticks
-    const firstTick = Math.ceil(trimStart / 1000 / interval) * interval * 1000;
+    const firstTick = Math.ceil(xStart / 1000 / xInterval) * xInterval * 1000;
     ctx.fillStyle = LABEL;
     ctx.font = '10px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
 
-    for (let ts = firstTick; ts <= trimEnd; ts += interval * 1000) {
+    for (let ts = firstTick; ts <= xEnd; ts += xInterval * 1000) {
       const px = toX(ts);
       const d = new Date(ts);
       const hh = String(d.getUTCHours()).padStart(2, '0');
       const mm = String(d.getUTCMinutes()).padStart(2, '0');
-      const label = interval < 60 ? `${hh}:${mm}:${String(d.getUTCSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
+      const label = xInterval < 60 ? `${hh}:${mm}:${String(d.getUTCSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
       ctx.beginPath();
       ctx.moveTo(px, axisY);
       ctx.lineTo(px, axisY + 4);
@@ -338,18 +347,18 @@ const Graph = (() => {
     }
 
     // Axis title
-    ctx.fillStyle = TITLE;
+    ctx.fillStyle = isManualX ? '#1e88e5' : TITLE;
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.fillText('Time (UTC)', M.left + plotW / 2, axisY + 30);
   }
 
-  function drawCursor(ctx, W, H, ts, trimStart, trimEnd, dpr) {
-    if (ts < trimStart || ts > trimEnd) return;
+  function drawCursor(ctx, W, H, ts, xStart, xEnd, dpr) {
+    if (ts < xStart || ts > xEnd) return;
     const plotW = W - M.left - M.right;
     const plotH = H - M.top  - M.bottom;
-    const px = M.left + (ts - trimStart) / (trimEnd - trimStart) * plotW;
+    const px = M.left + (ts - xStart) / (xEnd - xStart) * plotW;
 
     ctx.save();
     ctx.globalAlpha = 0.5;

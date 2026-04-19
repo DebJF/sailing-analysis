@@ -39,6 +39,9 @@ const App = (() => {
   // varName → { mode: 'auto' } | { mode: 'manual', min, max }
   const graphScales = new Map();
 
+  // { mode: 'auto' } | { mode: 'manual', start: ms, end: ms }
+  let graphXScale = { mode: 'auto' };
+
   // Whether track is coloured by tack
   let tackColorMode = false;
 
@@ -390,6 +393,7 @@ const App = (() => {
     document.getElementById('gybe-container').classList.toggle('view-hidden', view !== 'gybe');
     document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
+    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph');
     if (view === 'map')     MapManager.invalidateSize();
     if (view === 'beating') Analysis.render(collectUpwindData());
     if (view === 'twd')  renderTwdTable();
@@ -890,11 +894,26 @@ const App = (() => {
 
   // ── Graph tab ─────────────────────────────────────────────────────────────────
 
+  function fmtUTC(ms) {
+    const d = new Date(ms);
+    return [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()]
+      .map(n => String(n).padStart(2, '0')).join(':');
+  }
+
+  function parseUTCTime(str, refMs) {
+    const m = str.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!m) return null;
+    const d = new Date(refMs);
+    d.setUTCHours(+m[1], +m[2], m[3] !== undefined ? +m[3] : 0, 0);
+    return d.getTime();
+  }
+
   function handleGraphLabelClick(varName, clientX, clientY) {
     const existing = document.getElementById('graph-scale-popup');
     if (existing) existing.remove();
 
-    const current = graphScales.get(varName) || { mode: 'auto' };
+    const isXAxis = varName === null;
+    const current = isXAxis ? graphXScale : (graphScales.get(varName) || { mode: 'auto' });
 
     const popup = document.createElement('div');
     popup.id = 'graph-scale-popup';
@@ -912,7 +931,8 @@ const App = (() => {
     autoBtn.textContent = 'Auto';
     autoBtn.className = current.mode === 'auto' ? 'active' : '';
     autoBtn.addEventListener('click', () => {
-      graphScales.delete(varName);
+      if (isXAxis) graphXScale = { mode: 'auto' };
+      else graphScales.delete(varName);
       dismiss();
       if (currentView === 'graph') Graph.render(collectGraphData());
     });
@@ -922,19 +942,36 @@ const App = (() => {
     manualBtn.className = current.mode === 'manual' ? 'active' : '';
     manualBtn.addEventListener('click', () => {
       dismiss();
-      const defMin = current.mode === 'manual' ? current.min : '';
-      const defMax = current.mode === 'manual' ? current.max : '';
-      const minStr = window.prompt(`${varName} — lower limit:`, defMin);
-      if (minStr === null) return;
-      const maxStr = window.prompt(`${varName} — upper limit:`, defMax);
-      if (maxStr === null) return;
-      const min = parseFloat(minStr);
-      const max = parseFloat(maxStr);
-      if (isNaN(min) || isNaN(max) || min >= max) {
-        alert('Invalid limits — enter two numbers where lower < upper.');
-        return;
+      if (isXAxis) {
+        const { trimStart, trimEnd } = Playback.getState();
+        const defStart = current.mode === 'manual' ? fmtUTC(current.start) : fmtUTC(trimStart);
+        const defEnd   = current.mode === 'manual' ? fmtUTC(current.end)   : fmtUTC(trimEnd);
+        const startStr = window.prompt('Start time (HH:MM or HH:MM:SS UTC):', defStart);
+        if (startStr === null) return;
+        const endStr = window.prompt('End time (HH:MM or HH:MM:SS UTC):', defEnd);
+        if (endStr === null) return;
+        const start = parseUTCTime(startStr, trimStart);
+        const end   = parseUTCTime(endStr,   trimStart);
+        if (start === null || end === null || start >= end) {
+          alert('Invalid times — enter HH:MM or HH:MM:SS where start < end.');
+          return;
+        }
+        graphXScale = { mode: 'manual', start, end };
+      } else {
+        const defMin = current.mode === 'manual' ? current.min : '';
+        const defMax = current.mode === 'manual' ? current.max : '';
+        const minStr = window.prompt(`${varName} — lower limit:`, defMin);
+        if (minStr === null) return;
+        const maxStr = window.prompt(`${varName} — upper limit:`, defMax);
+        if (maxStr === null) return;
+        const min = parseFloat(minStr);
+        const max = parseFloat(maxStr);
+        if (isNaN(min) || isNaN(max) || min >= max) {
+          alert('Invalid limits — enter two numbers where lower < upper.');
+          return;
+        }
+        graphScales.set(varName, { mode: 'manual', min, max });
       }
-      graphScales.set(varName, { mode: 'manual', min, max });
       if (currentView === 'graph') Graph.render(collectGraphData());
     });
 
@@ -948,8 +985,15 @@ const App = (() => {
 
   function collectGraphData() {
     const { trimStart, trimEnd, currentTs } = Playback.getState();
+    let xStart = trimStart, xEnd = trimEnd;
+    if (graphXScale.mode === 'manual') {
+      xStart = Math.max(graphXScale.start, trimStart);
+      xEnd   = Math.min(graphXScale.end,   trimEnd);
+      if (xStart >= xEnd) { xStart = trimStart; xEnd = trimEnd; }
+    }
     return {
       trimStart, trimEnd, currentTs,
+      xStart, xEnd, xScale: graphXScale,
       series: graphVars.map(varName => {
         const isAbsTack = absTackVars.has(varName);
         return {
@@ -959,7 +1003,7 @@ const App = (() => {
           scale: graphScales.get(varName) || { mode: 'auto' },
           boats: [...boats.values()]
             .map(entry => {
-              const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], trimStart, trimEnd);
+              const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], xStart, xEnd);
               const absTackPoints = isAbsTack
                 ? pts.map(p => ({ ts: p.ts, val: Math.abs(p.val), _sign: Math.sign(p.val) }))
                 : null;
