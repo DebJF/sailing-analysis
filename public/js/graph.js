@@ -2,7 +2,7 @@
 const Graph = (() => {
 
   const BG         = '#0f1923';
-  const GRID       = '#1e3248';
+  const GRID       = '#243d52';
   const LABEL      = '#7fb3cc';
   const TITLE      = '#c8e6f5';
   const PORT_COLOR = '#e53935';
@@ -124,18 +124,20 @@ const Graph = (() => {
     const xSpan = trimEnd - trimStart; // ms
     const toX = ts => M.left + (ts - trimStart) / xSpan * plotW;
 
+    const xInterval = computeXInterval(trimStart, trimEnd);
+
     // Draw each band
     series.forEach((s, i) => {
       const bandTop = M.top + i * (bandH + GAP);
-      drawBand(ctx, s, bandTop, bandH, plotW, toX, W);
+      drawBand(ctx, s, bandTop, bandH, plotW, toX, W, trimStart, trimEnd, xInterval);
     });
 
     // Shared x-axis at bottom of last band
     const lastBandBottom = M.top + (n - 1) * (bandH + GAP) + bandH;
-    drawXAxis(ctx, W, lastBandBottom, plotW, trimStart, trimEnd, toX);
+    drawXAxis(ctx, W, lastBandBottom, plotW, trimStart, trimEnd, toX, xInterval);
   }
 
-  function drawBand(ctx, s, bandTop, bandH, plotW, toX, W) {
+  function drawBand(ctx, s, bandTop, bandH, plotW, toX, W, trimStart, trimEnd, xInterval) {
     const allVals = s.absTack
       ? s.boats.flatMap(b => (b.absTackPoints || []).map(p => p.val))
       : s.boats.flatMap(b => b.points.map(p => p.val));
@@ -158,23 +160,38 @@ const Graph = (() => {
     const toY = v => bandTop + (1 - (v - yMin) / (yMax - yMin)) * bandH;
 
     // Grid lines + y-axis ticks
-    const { step, niceMin, niceMax } = niceScale(yMin, yMax, 5);
+    const { step, niceMin, niceMax } = niceScale(yMin, yMax, 8);
     ctx.strokeStyle = GRID;
     ctx.lineWidth = 1;
+
+    // Horizontal grid lines
     ctx.fillStyle = LABEL;
     ctx.font = '10px system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-
     for (let v = niceMin; v <= niceMax + step * 0.01; v += step) {
       if (v < yMin || v > yMax) continue;
       const py = toY(v);
+      ctx.strokeStyle = GRID;
       ctx.beginPath();
       ctx.moveTo(M.left, py);
       ctx.lineTo(M.left + plotW, py);
       ctx.stroke();
       ctx.fillStyle = LABEL;
       ctx.fillText(formatTick(v, step), M.left - 5, py);
+    }
+
+    // Vertical grid lines (aligned with x-axis ticks)
+    if (xInterval && trimStart !== undefined) {
+      const firstTick = Math.ceil(trimStart / 1000 / xInterval) * xInterval * 1000;
+      ctx.strokeStyle = GRID;
+      for (let ts = firstTick; ts <= trimEnd; ts += xInterval * 1000) {
+        const px = toX(ts);
+        ctx.beginPath();
+        ctx.moveTo(px, bandTop);
+        ctx.lineTo(px, bandTop + bandH);
+        ctx.stroke();
+      }
     }
 
     // Y-axis label (variable name + unit)
@@ -275,14 +292,17 @@ const Graph = (() => {
     });
   }
 
-  function drawXAxis(ctx, W, axisY, plotW, trimStart, trimEnd, toX) {
+  function computeXInterval(trimStart, trimEnd) {
     const xSpanS = (trimEnd - trimStart) / 1000;
-
-    // Pick tick interval: aim for ~6 ticks
     let interval = X_INTERVALS_S[X_INTERVALS_S.length - 1];
     for (const s of X_INTERVALS_S) {
       if (xSpanS / s <= 7) { interval = s; break; }
     }
+    return interval;
+  }
+
+  function drawXAxis(ctx, W, axisY, plotW, trimStart, trimEnd, toX, xInterval) {
+    const interval = xInterval ?? computeXInterval(trimStart, trimEnd);
 
     // Bottom axis line
     ctx.strokeStyle = LABEL;
