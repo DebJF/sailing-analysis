@@ -279,6 +279,15 @@ const App = (() => {
     onTick(st.currentTs);
   }
 
+  function rebuildAllFieldNames() {
+    allFieldNames.clear();
+    for (const [, entry] of boats) {
+      for (const [id, nm] of Object.entries(entry.boat.fieldMap)) {
+        if (!allFieldNames.has(nm)) allFieldNames.set(nm, parseInt(id, 10));
+      }
+    }
+  }
+
   function buildFieldTimeseries(boat) {
     // fieldId → [{ts, val}] sorted by ts (rows are already sorted)
     const map = new Map();
@@ -1207,6 +1216,7 @@ const App = (() => {
         const name = btn.dataset.name;
         MapManager.removeBoat(name);
         boats.delete(name);
+        rebuildAllFieldNames();
         recalcPlaybackRange();
         for (const [, e] of boats) MapManager.clearTrim(e.boat);
         const st = Playback.getState();
