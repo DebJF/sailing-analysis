@@ -530,6 +530,51 @@ body {
   min-width: 50px;
 }
 
+/* ── About tab ───────────────────────────────────────────────────────────────── */
+#about-container {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+}
+#about-content {
+  max-width: 680px;
+  padding: 32px 40px;
+  line-height: 1.7;
+}
+#about-content h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+#about-content h3 {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 24px 0 12px;
+}
+#about-content p {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+#about-content a { color: var(--accent); text-decoration: none; }
+#about-content a:hover { text-decoration: underline; }
+#about-content dl { display: flex; flex-direction: column; gap: 12px; }
+#about-content dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+#about-content dd {
+  font-size: 13px;
+  color: var(--muted);
+  margin-left: 16px;
+  line-height: 1.6;
+}
+
 /* ── Statistics tab ─────────────────────────────────────────────────────────── */
 #stats-container {
   flex: 1;

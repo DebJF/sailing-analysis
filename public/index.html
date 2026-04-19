@@ -19,6 +19,7 @@
       <button id="tab-gybe"    class="tab-btn">Gybing</button>
       <button id="tab-graph"   class="tab-btn">Graph</button>
       <button id="tab-stats"   class="tab-btn">Statistics</button>
+      <button id="tab-about"   class="tab-btn">About</button>
     </nav>
     <label class="upload-btn" title="Upload Expedition CSV log files">
       + Upload Files
@@ -56,6 +57,38 @@
     <div id="gybe-container" class="view-hidden">
       <canvas id="gybe-vmg-canvas"></canvas>
       <div id="gybe-content"></div>
+    </div>
+
+    <!-- About -->
+    <div id="about-container" class="view-hidden">
+      <div id="about-content">
+        <h2>Sailing Analysis</h2>
+        <p>This viewer has been written by Deb Fish using Claude Code and deployed through Vercel to <a href="https://sailing-analysis.vercel.app/" target="_blank">sailing-analysis.vercel.app</a>.</p>
+        <p>Users can upload one or more log files from Expedition navigation software and view them (no other formats supported yet).</p>
+
+        <h3>Tabs</h3>
+        <dl>
+          <dt>Map</dt>
+          <dd>Displays the yacht(s) tracks on a nautical chart. Allows the user to scroll in and out, set the start and end of the race or period of interest, display wind barbs (measured), display selected variables at the selected point on the track, colour the track according to the vessel's tack, and use the ruler to measure distances.</dd>
+
+          <dt>Upwind Polars</dt>
+          <dd>A scatter plot of TWA against boat speed. I am not finding this useful yet.</dd>
+
+          <dt>Tacking</dt>
+          <dd>Plots VMG through the tack, compares TWD before and after the tack, estimates the ground lost in the tack, counts the number of tacks, and calculates the average difference in TWD immediately before and after the tack, and the average ground lost in the tack. Calculations of ground lost take the average VMG between 40 and 10 seconds before the tack as a reference, and calculate the integrated loss in VMG from 10s before the tack to 50s after.</dd>
+
+          <dt>Gybing</dt>
+          <dd>As Tacking but for gybing.</dd>
+
+          <dt>Graph</dt>
+          <dd>Allows the user to select variables and plot them against time. For AWA and TWA only, the |±| button toggles between showing the actual AWA / TWA and the magnitude, converting negative values to positive and colour-coding which tack the boat is on. This feature only really works well with a single boat, as for multiple boats the lines are all coloured red and green for port and starboard tack respectively.</dd>
+
+          <dt>Statistics</dt>
+          <dd>Displays average values of key variables over a selected time window, with standard deviations. Tack manoeuvre periods are excluded from angle and polar percentage averages.</dd>
+        </dl>
+
+        <p>The viewer can be used with a single boat, but is particularly insightful when used with log files from multiple similar boats, as that allows both performance and calibration to be compared.</p>
+      </div>
     </div>
 
     <!-- Statistics -->

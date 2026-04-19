@@ -122,6 +122,7 @@ const App = (() => {
     document.getElementById('tab-gybe').addEventListener('click', () => switchView('gybe'));
     document.getElementById('tab-graph').addEventListener('click', () => switchView('graph'));
     document.getElementById('tab-stats').addEventListener('click', () => switchView('stats'));
+    document.getElementById('tab-about').addEventListener('click', () => switchView('about'));
     document.getElementById('btn-stats-apply').addEventListener('click', () => renderStatsTab());
 
     // Populate speed selector
@@ -432,14 +433,16 @@ const App = (() => {
     document.getElementById('tab-gybe').classList.toggle('active', view === 'gybe');
     document.getElementById('tab-graph').classList.toggle('active', view === 'graph');
     document.getElementById('tab-stats').classList.toggle('active', view === 'stats');
+    document.getElementById('tab-about').classList.toggle('active', view === 'about');
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
     document.getElementById('gybe-container').classList.toggle('view-hidden', view !== 'gybe');
     document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
     document.getElementById('stats-container').classList.toggle('view-hidden', view !== 'stats');
+    document.getElementById('about-container').classList.toggle('view-hidden', view !== 'about');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
-    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats');
+    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats' || view === 'about');
     elBtnRuler.classList.toggle('view-hidden', view !== 'map');
     if (view !== 'map' && rulerMode) {
       rulerMode = false;
