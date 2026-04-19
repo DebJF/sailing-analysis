@@ -945,12 +945,19 @@ const App = (() => {
 
   // ── Statistics tab ────────────────────────────────────────────────────────────
 
-  function getStatValue(entry, row, startTs, endTs) {
+  function getStatValue(entry, row, startTs, endTs, tacks) {
     if (row.mode === 'avg' || row.mode === 'avgAbs') {
       const series = getFieldSeries(entry, row.key);
       if (!series) return null;
-      const slice = sliceSeriesByTs(series, startTs, endTs);
+      let slice = sliceSeriesByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
+      // Exclude tack maneuver windows from angle averages
+      if (row.mode === 'avgAbs' && tacks && tacks.length > 0) {
+        slice = slice.filter(p => !tacks.some(
+          t => p.ts >= t.ts + TACK_INT_FROM && p.ts <= t.ts + TACK_INT_TO
+        ));
+        if (slice.length === 0) return null;
+      }
       const sum = slice.reduce((s, p) => s + (row.mode === 'avgAbs' ? Math.abs(p.val) : p.val), 0);
       return sum / slice.length;
     }
@@ -989,6 +996,7 @@ const App = (() => {
     }
 
     const boatEntries = [...boats.values()];
+    const boatTacks   = boatEntries.map(entry => detectTacks(entry));
 
     let html = '<table class="stats-table"><thead><tr><th>Variable</th><th>Unit</th>';
     for (const { boat } of boatEntries) {
@@ -998,10 +1006,10 @@ const App = (() => {
 
     for (const row of STATS_ROWS) {
       html += `<tr><td class="stats-var">${row.label}</td><td class="stats-unit">${row.unit}</td>`;
-      for (const entry of boatEntries) {
-        const val = getStatValue(entry, row, startTs, endTs);
+      boatEntries.forEach((entry, i) => {
+        const val = getStatValue(entry, row, startTs, endTs, boatTacks[i]);
         html += `<td>${formatStat(val, row.unit)}</td>`;
-      }
+      });
       html += '</tr>';
     }
     html += '</tbody></table>';
