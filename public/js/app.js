@@ -7,7 +7,7 @@ const App = (() => {
     BSP: 'kts', TWS: 'kts', AWS: 'kts', SOG: 'kts', VMG: 'kts',
     TWA: '°', AWA: '°', HDG: '°', COG: '°', TWD: '°', Heel: '°', Rudder: '°',
     'Pol0%': '%', 'PolBsp%': '%', 'VMG%': '%',
-    PolBsp: 'kts', TargTwa: '°',
+    PolBsp: 'kts', 'Targ Twa': '°',
     Depth: 'm', Baro: 'hPa', Altitude: 'm',
   };
 
@@ -23,7 +23,7 @@ const App = (() => {
     { key: 'AWS',   label: 'AWS',       unit: 'kts', mode: 'avg'      },
     { key: 'TWA',   label: '|TWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'AWA',      label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
-    { key: 'TargTwa',  label: 'Targ TWA',  unit: '°',   mode: 'avg'      },
+    { key: 'Targ Twa', label: 'Targ TWA',  unit: '°',   mode: 'avg'      },
     { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg'      },
     { key: 'PolBsp', label: 'PolBsp',    unit: 'kts', mode: 'avg'      },
     { key: 'PolBsp%', label: 'PolBsp%',  unit: '%',   mode: 'avg', excludeTacks: true },
