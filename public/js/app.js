@@ -25,7 +25,7 @@ const App = (() => {
     { key: 'AWA',   label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg'      },
     { key: 'PolBsp', label: 'PolBsp',    unit: 'kts', mode: 'avg'      },
-    { key: 'PolBsp%', label: 'PolBsp%',  unit: '%',   mode: 'avg'      },
+    { key: 'PolBsp%', label: 'PolBsp%',  unit: '%',   mode: 'avg', excludeTacks: true },
     { key: 'VMG',   label: 'VMG',       unit: 'kts', mode: 'avg'      },
     { key: 'VMG%',  label: 'VMG%',      unit: '%',   mode: 'avg'      },
   ];
@@ -951,7 +951,7 @@ const App = (() => {
       if (!series) return null;
       let slice = sliceSeriesByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
-      if (row.mode === 'avgAbs' && tacks && tacks.length > 0) {
+      if ((row.mode === 'avgAbs' || row.excludeTacks) && tacks && tacks.length > 0) {
         slice = slice.filter(p => !tacks.some(
           t => p.ts >= t.ts + TACK_INT_FROM && p.ts <= t.ts + TACK_INT_TO
         ));
