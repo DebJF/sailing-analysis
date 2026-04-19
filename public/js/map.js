@@ -25,7 +25,33 @@ const MapManager = (() => {
       maxZoom: 18,
       opacity: 0.9,
     }).addTo(map);
+
+    new NmScaleControl().addTo(map);
   }
+
+  const NmScaleControl = L.Control.extend({
+    options: { position: 'bottomleft' },
+    onAdd(m) {
+      this._m  = m;
+      this._el = L.DomUtil.create('div', 'nm-scale-bar');
+      m.on('zoomend moveend', this._update, this);
+      this._update();
+      return this._el;
+    },
+    onRemove(m) {
+      m.off('zoomend moveend', this._update, this);
+    },
+    _update() {
+      const bounds = this._m.getBounds();
+      const mPerPx = this._m.distance(bounds.getSouthWest(), bounds.getSouthEast()) / this._m.getSize().x;
+      const maxNm  = mPerPx * 150 / 1852;
+      const steps  = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500];
+      let nm = steps[0];
+      for (const s of steps) { if (s <= maxNm) nm = s; else break; }
+      this._el.style.width = Math.round(nm * 1852 / mPerPx) + 'px';
+      this._el.textContent = nm + ' nm';
+    },
+  });
 
   function addBoat(boat) {
     if (entries.has(boat.name)) removeBoat(boat.name);

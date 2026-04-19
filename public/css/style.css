@@ -503,6 +503,19 @@ body {
 #wind-interval { flex-shrink: 0; min-width: 62px; }
 .hidden-control { display: none; }
 .wind-barb-icon { background: none !important; border: none !important; }
+.nm-scale-bar {
+  border: 2px solid rgba(0,0,0,0.55);
+  border-top: none;
+  background: rgba(255,255,255,0.8);
+  padding: 1px 0 2px;
+  font-size: 11px;
+  font-family: system-ui, sans-serif;
+  color: #222;
+  text-align: center;
+  white-space: nowrap;
+  box-sizing: border-box;
+  min-width: 50px;
+}
 
 /* ── Graph tab ───────────────────────────────────────────────────────────────── */
 #graph-container {
