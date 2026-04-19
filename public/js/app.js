@@ -950,6 +950,10 @@ const App = (() => {
 
   // ── Statistics tab ────────────────────────────────────────────────────────────
 
+  function computeSE(sumSq, n) {
+    return n > 1 ? Math.sqrt(sumSq / n / n) : 0;
+  }
+
   function getStatValue(entry, row, startTs, endTs, tacks) {
     if (row.mode === 'avg' || row.mode === 'avgAbs') {
       const series = getFieldSeries(entry, row.key);
@@ -964,10 +968,8 @@ const App = (() => {
       }
       const vals = slice.map(p => row.mode === 'avgAbs' ? Math.abs(p.val) : p.val);
       const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
-      const sd   = vals.length > 1
-        ? Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length)
-        : 0;
-      return { mean, sd };
+      const se   = computeSE(vals.reduce((s, v) => s + (v - mean) ** 2, 0), vals.length);
+      return { mean, se };
     }
     if (row.mode === 'circular') {
       const series = getFieldSeries(entry, row.key);
@@ -977,10 +979,8 @@ const App = (() => {
       const vals = slice.map(p => p.val);
       const mean = circularMean(vals);
       if (mean === null) return null;
-      const sd = vals.length > 1
-        ? Math.sqrt(vals.reduce((s, v) => s + normalizeAngle(v - mean) ** 2, 0) / vals.length)
-        : 0;
-      return { mean, sd };
+      const se = computeSE(vals.reduce((s, v) => s + normalizeAngle(v - mean) ** 2, 0), vals.length);
+      return { mean, se };
     }
     return null;
   }
@@ -1022,7 +1022,7 @@ const App = (() => {
   function formatStat(stat, unit) {
     if (stat === null) return '—';
     const dp = unit === 'kts' ? 2 : 1;
-    return `${stat.mean.toFixed(dp)} <span class="stats-sd">(±${stat.sd.toFixed(dp)})</span>`;
+    return `${stat.mean.toFixed(dp)} <span class="stats-se">(±${stat.se.toFixed(dp)})</span>`;
   }
 
   // ── Graph tab ─────────────────────────────────────────────────────────────────
