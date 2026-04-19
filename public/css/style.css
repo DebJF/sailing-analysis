@@ -591,6 +591,8 @@ body {
   color: #fff;
   background: linear-gradient(90deg, var(--danger) 50%, var(--success) 50%);
 }
+#btn-graph-smooth { margin-left: 8px; }
+#btn-graph-smooth.active { background: var(--accent); color: #fff; }
 
 /* ── Name modal ──────────────────────────────────────────────────────────────── */
 .modal-backdrop {

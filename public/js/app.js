@@ -42,6 +42,9 @@ const App = (() => {
   // { mode: 'auto' } | { mode: 'manual', start: ms, end: ms }
   let graphXScale = { mode: 'auto' };
 
+  // Smoothing window in seconds (0 = disabled)
+  let graphSmooth = 0;
+
   // Whether track is coloured by tack
   let tackColorMode = false;
   let rulerMode = false;
@@ -1003,6 +1006,29 @@ const App = (() => {
     setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
   }
 
+  function smoothSeries(pts, windowMs) {
+    if (!windowMs || pts.length < 2) return pts;
+    const sigma2 = 2 * (windowMs / 6) * (windowMs / 6);
+    const n = pts.length;
+    const result = new Array(n);
+    // Two-pointer sliding window — pts is sorted by ts, so lo/hi only advance
+    let lo = 0, hi = 0;
+    for (let i = 0; i < n; i++) {
+      const t = pts[i].ts;
+      while (pts[lo].ts < t - windowMs) lo++;
+      while (hi < n && pts[hi].ts <= t + windowMs) hi++;
+      let wSum = 0, vSum = 0;
+      for (let j = lo; j < hi; j++) {
+        const dt = pts[j].ts - t;
+        const w = Math.exp(-(dt * dt) / sigma2);
+        wSum += w;
+        vSum += w * pts[j].val;
+      }
+      result[i] = { ts: t, val: wSum > 0 ? vSum / wSum : pts[i].val };
+    }
+    return result;
+  }
+
   function collectGraphData() {
     const { trimStart, trimEnd, currentTs } = Playback.getState();
     let xStart = trimStart, xEnd = trimEnd;
@@ -1023,7 +1049,8 @@ const App = (() => {
           scale: graphScales.get(varName) || { mode: 'auto' },
           boats: [...boats.values()]
             .map(entry => {
-              const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], xStart, xEnd);
+              const raw = sliceSeriesByTs(getFieldSeries(entry, varName) || [], xStart, xEnd);
+              const pts = graphSmooth > 0 ? smoothSeries(raw, graphSmooth * 1000) : raw;
               const absTackPoints = isAbsTack
                 ? pts.map(p => ({ ts: p.ts, val: Math.abs(p.val), _sign: Math.sign(p.val) }))
                 : null;
@@ -1105,6 +1132,23 @@ const App = (() => {
       }
     });
     el.appendChild(sel);
+
+    // Smooth button
+    const smoothBtn = document.createElement('button');
+    smoothBtn.id = 'btn-graph-smooth';
+    smoothBtn.className = graphSmooth > 0 ? 'active' : '';
+    smoothBtn.title = 'Smooth data with a Gaussian moving average';
+    smoothBtn.textContent = graphSmooth > 0 ? `~${graphSmooth}s` : 'Smooth';
+    smoothBtn.addEventListener('click', () => {
+      const input = window.prompt('Smooth window in seconds (0 to disable):', graphSmooth > 0 ? String(graphSmooth) : '30');
+      if (input === null) return;
+      const secs = parseFloat(input);
+      graphSmooth = isNaN(secs) || secs <= 0 ? 0 : secs;
+      smoothBtn.classList.toggle('active', graphSmooth > 0);
+      smoothBtn.textContent = graphSmooth > 0 ? `~${graphSmooth}s` : 'Smooth';
+      if (currentView === 'graph') Graph.render(collectGraphData());
+    });
+    el.appendChild(smoothBtn);
   }
 
   // ── Playback callbacks ────────────────────────────────────────────────────────
