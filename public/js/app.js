@@ -14,6 +14,7 @@ const App = (() => {
 
   const PORT_COLOR = '#e53935';
   const STBD_COLOR = '#43a047';
+  const ABS_TACK_VARS = new Set(['AWA', 'TWA']);
 
   // ── State ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,9 @@ const App = (() => {
 
   // Variables plotted in the Graph tab
   let graphVars = ['TWS'];
+
+  // Subset of graphVars currently in abs+tack-color mode (AWA/TWA only)
+  let absTackVars = new Set();
 
   // Whether track is coloured by tack
   let tackColorMode = false;
@@ -887,19 +891,27 @@ const App = (() => {
     const { trimStart, trimEnd, currentTs } = Playback.getState();
     return {
       trimStart, trimEnd, currentTs,
-      series: graphVars.map(varName => ({
-        varName,
-        unit: UNITS[varName] || '',
-        boats: [...boats.values()]
-          .map(entry => {
-            const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], trimStart, trimEnd);
-            const avg = pts.length > 0
-              ? pts.reduce((s, p) => s + p.val, 0) / pts.length
-              : null;
-            return { name: entry.boat.name, color: entry.boat.color, points: pts, avg };
-          })
-          .filter(b => b.points.length > 0),
-      })),
+      series: graphVars.map(varName => {
+        const isAbsTack = absTackVars.has(varName);
+        return {
+          varName,
+          unit: UNITS[varName] || '',
+          absTack: isAbsTack,
+          boats: [...boats.values()]
+            .map(entry => {
+              const pts = sliceSeriesByTs(getFieldSeries(entry, varName) || [], trimStart, trimEnd);
+              const absTackPoints = isAbsTack
+                ? pts.map(p => ({ ts: p.ts, val: Math.abs(p.val), _sign: Math.sign(p.val) }))
+                : null;
+              const sourcePts = isAbsTack ? absTackPoints : pts;
+              const avg = sourcePts.length > 0
+                ? sourcePts.reduce((s, p) => s + p.val, 0) / sourcePts.length
+                : null;
+              return { name: entry.boat.name, color: entry.boat.color, points: pts, absTackPoints, avg };
+            })
+            .filter(b => b.points.length > 0),
+        };
+      }),
     };
   }
 
@@ -914,17 +926,32 @@ const App = (() => {
 
       const label = document.createElement('span');
       label.textContent = varName;
+      chip.appendChild(label);
+
+      if (ABS_TACK_VARS.has(varName)) {
+        const absBtn = document.createElement('button');
+        absBtn.className = 'graph-abs-btn' + (absTackVars.has(varName) ? ' active' : '');
+        absBtn.title = 'Toggle abs + tack color';
+        absBtn.textContent = '|±|';
+        absBtn.addEventListener('click', () => {
+          if (absTackVars.has(varName)) absTackVars.delete(varName);
+          else absTackVars.add(varName);
+          renderGraphControls();
+          if (currentView === 'graph') Graph.render(collectGraphData());
+        });
+        chip.appendChild(absBtn);
+      }
 
       const btn = document.createElement('button');
       btn.textContent = '×';
       btn.title = 'Remove';
       btn.addEventListener('click', () => {
         graphVars = graphVars.filter(v => v !== varName);
+        absTackVars.delete(varName);
         renderGraphControls();
         if (currentView === 'graph') Graph.render(collectGraphData());
       });
 
-      chip.appendChild(label);
       chip.appendChild(btn);
       el.appendChild(chip);
     }

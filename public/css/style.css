@@ -545,6 +545,12 @@ body {
   line-height: 1;
 }
 .graph-var-chip button:hover { color: var(--danger); }
+.graph-abs-btn { font-size: 10px; padding: 0 3px; }
+.graph-abs-btn:hover { color: var(--text); }
+.graph-abs-btn.active {
+  color: #fff;
+  background: linear-gradient(90deg, var(--danger) 50%, var(--success) 50%);
+}
 
 /* ── Name modal ──────────────────────────────────────────────────────────────── */
 .modal-backdrop {

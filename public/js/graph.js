@@ -1,10 +1,12 @@
 // Graph tab — time-series canvas renderer
 const Graph = (() => {
 
-  const BG    = '#0f1923';
-  const GRID  = '#1e3248';
-  const LABEL = '#7fb3cc';
-  const TITLE = '#c8e6f5';
+  const BG         = '#0f1923';
+  const GRID       = '#1e3248';
+  const LABEL      = '#7fb3cc';
+  const TITLE      = '#c8e6f5';
+  const PORT_COLOR = '#e53935';
+  const STBD_COLOR = '#43a047';
   const GAP   = 8; // px between sub-plot bands
   const M     = { top: 12, right: 24, bottom: 40, left: 58 };
 
@@ -94,7 +96,9 @@ const Graph = (() => {
   }
 
   function drawBand(ctx, s, bandTop, bandH, plotW, toX, W) {
-    const allVals = s.boats.flatMap(b => b.points.map(p => p.val));
+    const allVals = s.absTack
+      ? s.boats.flatMap(b => (b.absTackPoints || []).map(p => p.val))
+      : s.boats.flatMap(b => b.points.map(p => p.val));
     if (allVals.length === 0) return;
 
     let yMin = Math.min(...allVals);
@@ -127,7 +131,8 @@ const Graph = (() => {
     }
 
     // Y-axis label (variable name + unit)
-    const label = s.unit ? `${s.varName} (${s.unit})` : s.varName;
+    const varDisplay = s.absTack ? `|${s.varName}|` : s.varName;
+    const label = s.unit ? `${varDisplay} (${s.unit})` : varDisplay;
     ctx.save();
     ctx.fillStyle = TITLE;
     ctx.font = '11px system-ui, sans-serif';
@@ -149,19 +154,41 @@ const Graph = (() => {
     // Data lines
     s.boats.forEach(b => {
       if (b.points.length < 2) return;
-      ctx.strokeStyle = b.color;
       ctx.globalAlpha = 0.85;
       ctx.lineWidth = 1.5;
       ctx.lineJoin = 'round';
-      ctx.beginPath();
-      let started = false;
-      for (const { ts, val } of b.points) {
-        const px = toX(ts);
-        const py = toY(val);
-        if (!started) { ctx.moveTo(px, py); started = true; }
-        else ctx.lineTo(px, py);
+
+      if (s.absTack && b.absTackPoints) {
+        const pts = b.absTackPoints;
+        let i = 0;
+        while (i < pts.length) {
+          const segSign = pts[i]._sign >= 0 ? 1 : -1;
+          ctx.strokeStyle = segSign >= 0 ? STBD_COLOR : PORT_COLOR;
+          ctx.beginPath();
+          ctx.moveTo(toX(pts[i].ts), toY(pts[i].val));
+          let j = i + 1;
+          while (j < pts.length && (pts[j]._sign >= 0 ? 1 : -1) === segSign) {
+            ctx.lineTo(toX(pts[j].ts), toY(pts[j].val));
+            j++;
+          }
+          // Extend one point into the next segment to avoid a gap at the zero crossing
+          if (j < pts.length) ctx.lineTo(toX(pts[j].ts), toY(pts[j].val));
+          ctx.stroke();
+          i = j;
+        }
+      } else {
+        ctx.strokeStyle = b.color;
+        ctx.beginPath();
+        let started = false;
+        for (const { ts, val } of b.points) {
+          const px = toX(ts);
+          const py = toY(val);
+          if (!started) { ctx.moveTo(px, py); started = true; }
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
+
       ctx.globalAlpha = 1;
     });
 
@@ -177,10 +204,22 @@ const Graph = (() => {
       const txt = b.avg.toFixed(dp) + (unit ? '\u00a0' + unit : '');
       const textW = ctx.measureText(txt).width;
       // dot
-      ctx.fillStyle = b.color;
-      ctx.beginPath();
-      ctx.arc(legendX - textW - 8, legendY, 3.5, 0, Math.PI * 2);
-      ctx.fill();
+      const dotX = legendX - textW - 8;
+      if (s.absTack) {
+        ctx.fillStyle = PORT_COLOR;
+        ctx.beginPath();
+        ctx.arc(dotX, legendY, 3.5, Math.PI / 2, Math.PI * 3 / 2);
+        ctx.fill();
+        ctx.fillStyle = STBD_COLOR;
+        ctx.beginPath();
+        ctx.arc(dotX, legendY, 3.5, -Math.PI / 2, Math.PI / 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = b.color;
+        ctx.beginPath();
+        ctx.arc(dotX, legendY, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
       // value
       ctx.fillStyle = TITLE;
       ctx.textAlign = 'right';
