@@ -902,12 +902,18 @@ const App = (() => {
     popup.style.left = clientX + 8 + 'px';
     popup.style.top  = clientY - 16 + 'px';
 
+    let outsideClick;
+    const dismiss = () => {
+      popup.remove();
+      document.removeEventListener('mousedown', outsideClick);
+    };
+
     const autoBtn = document.createElement('button');
     autoBtn.textContent = 'Auto';
     autoBtn.className = current.mode === 'auto' ? 'active' : '';
     autoBtn.addEventListener('click', () => {
       graphScales.delete(varName);
-      popup.remove();
+      dismiss();
       if (currentView === 'graph') Graph.render(collectGraphData());
     });
 
@@ -915,7 +921,7 @@ const App = (() => {
     manualBtn.textContent = 'Manual';
     manualBtn.className = current.mode === 'manual' ? 'active' : '';
     manualBtn.addEventListener('click', () => {
-      popup.remove();
+      dismiss();
       const defMin = current.mode === 'manual' ? current.min : '';
       const defMax = current.mode === 'manual' ? current.max : '';
       const minStr = window.prompt(`${varName} — lower limit:`, defMin);
@@ -936,10 +942,8 @@ const App = (() => {
     popup.appendChild(manualBtn);
     document.body.appendChild(popup);
 
-    const close = e => {
-      if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('mousedown', close); }
-    };
-    setTimeout(() => document.addEventListener('mousedown', close), 0);
+    outsideClick = e => { if (!popup.contains(e.target)) dismiss(); };
+    setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
   }
 
   function collectGraphData() {
@@ -1015,7 +1019,6 @@ const App = (() => {
 
     // Add variable dropdown
     const sel = document.createElement('select');
-    sel.style.cssText = 'background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;';
     const placeholder = document.createElement('option');
     placeholder.value = '';
     placeholder.textContent = '+ Add variable';

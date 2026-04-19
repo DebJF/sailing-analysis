@@ -18,8 +18,8 @@ const Graph = (() => {
   let _lastData = null;
   let _onClick = null;
 
-  function init({ onClick } = {}) {
-    _onClick = onClick || null;
+  function init({ onClick = null } = {}) {
+    _onClick = onClick;
     canvas = document.getElementById('graph-canvas');
     new ResizeObserver(() => {
       if (_lastData) render(_lastData);
@@ -129,7 +129,7 @@ const Graph = (() => {
     // Draw each band
     series.forEach((s, i) => {
       const bandTop = M.top + i * (bandH + GAP);
-      drawBand(ctx, s, bandTop, bandH, plotW, toX, W, trimStart, trimEnd, xInterval);
+      drawBand(ctx, s, bandTop, bandH, plotW, toX, trimStart, trimEnd, xInterval);
     });
 
     // Shared x-axis at bottom of last band
@@ -137,7 +137,7 @@ const Graph = (() => {
     drawXAxis(ctx, W, lastBandBottom, plotW, trimStart, trimEnd, toX, xInterval);
   }
 
-  function drawBand(ctx, s, bandTop, bandH, plotW, toX, W, trimStart, trimEnd, xInterval) {
+  function drawBand(ctx, s, bandTop, bandH, plotW, toX, trimStart, trimEnd, xInterval) {
     const allVals = s.absTack
       ? s.boats.flatMap(b => (b.absTackPoints || []).map(p => p.val))
       : s.boats.flatMap(b => b.points.map(p => p.val));
@@ -165,33 +165,38 @@ const Graph = (() => {
     ctx.lineWidth = 1;
 
     // Horizontal grid lines
-    ctx.fillStyle = LABEL;
     ctx.font = '10px system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
+    const hTicks = [];
     for (let v = niceMin; v <= niceMax + step * 0.01; v += step) {
       if (v < yMin || v > yMax) continue;
+      hTicks.push(v);
+    }
+    ctx.strokeStyle = GRID;
+    ctx.beginPath();
+    for (const v of hTicks) {
       const py = toY(v);
-      ctx.strokeStyle = GRID;
-      ctx.beginPath();
       ctx.moveTo(M.left, py);
       ctx.lineTo(M.left + plotW, py);
-      ctx.stroke();
-      ctx.fillStyle = LABEL;
-      ctx.fillText(formatTick(v, step), M.left - 5, py);
+    }
+    ctx.stroke();
+    ctx.fillStyle = LABEL;
+    for (const v of hTicks) {
+      ctx.fillText(formatTick(v, step), M.left - 5, toY(v));
     }
 
     // Vertical grid lines (aligned with x-axis ticks)
-    if (xInterval && trimStart !== undefined) {
+    if (xInterval) {
       const firstTick = Math.ceil(trimStart / 1000 / xInterval) * xInterval * 1000;
       ctx.strokeStyle = GRID;
+      ctx.beginPath();
       for (let ts = firstTick; ts <= trimEnd; ts += xInterval * 1000) {
         const px = toX(ts);
-        ctx.beginPath();
         ctx.moveTo(px, bandTop);
         ctx.lineTo(px, bandTop + bandH);
-        ctx.stroke();
       }
+      ctx.stroke();
     }
 
     // Y-axis label (variable name + unit)
@@ -302,7 +307,7 @@ const Graph = (() => {
   }
 
   function drawXAxis(ctx, W, axisY, plotW, trimStart, trimEnd, toX, xInterval) {
-    const interval = xInterval ?? computeXInterval(trimStart, trimEnd);
+    const interval = xInterval;
 
     // Bottom axis line
     ctx.strokeStyle = LABEL;
