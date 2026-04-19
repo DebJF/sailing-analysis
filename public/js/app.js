@@ -23,7 +23,7 @@ const App = (() => {
     { key: 'TWA',   label: '|TWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'AWA',   label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg'      },
-    { key: 'PolBSP',label: 'Polar BSP', unit: 'kts', mode: 'polBsp'   },
+    { key: 'PolBsp', label: 'PolBsp',    unit: 'kts', mode: 'avg'      },
     { key: 'Pol0%', label: 'Pol%',      unit: '%',   mode: 'avg'      },
     { key: 'VMG',   label: 'VMG',       unit: 'kts', mode: 'avg'      },
     { key: 'VMG%',  label: 'VMG%',      unit: '%',   mode: 'avg'      },
