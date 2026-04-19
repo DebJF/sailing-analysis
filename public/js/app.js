@@ -16,6 +16,19 @@ const App = (() => {
   const STBD_COLOR = '#43a047';
   const ABS_TACK_VARS = new Set(['AWA', 'TWA']);
 
+  const STATS_ROWS = [
+    { key: 'TWS',   label: 'TWS',       unit: 'kts', mode: 'avg'      },
+    { key: 'TWD',   label: 'TWD',       unit: '°',   mode: 'circular' },
+    { key: 'AWS',   label: 'AWS',       unit: 'kts', mode: 'avg'      },
+    { key: 'TWA',   label: '|TWA|',     unit: '°',   mode: 'avgAbs'   },
+    { key: 'AWA',   label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
+    { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg'      },
+    { key: 'PolBSP',label: 'Polar BSP', unit: 'kts', mode: 'polBsp'   },
+    { key: 'Pol0%', label: 'Pol%',      unit: '%',   mode: 'avg'      },
+    { key: 'VMG',   label: 'VMG',       unit: 'kts', mode: 'avg'      },
+    { key: 'VMG%',  label: 'VMG%',      unit: '%',   mode: 'avg'      },
+  ];
+
   // ── State ────────────────────────────────────────────────────────────────────
 
   // name → { boat, fieldTimeseries: Map<fieldId, [{ts,val}]> }
@@ -63,7 +76,8 @@ const App = (() => {
       elBtnTrimStart, elBtnTrimEnd, elBtnClearTrim, elBtnTackColor,
       elBtnWind, elWindInterval, elBtnRuler,
       elScrubber, elSpeedSelect, elTimeDisplay,
-      elModal, elModalFilename, elBoatNameInput, elBtnModalOk;
+      elModal, elModalFilename, elBoatNameInput, elBtnModalOk,
+      elStatsStart, elStatsEnd, elStatsContent;
 
   // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -90,6 +104,9 @@ const App = (() => {
     elModalFilename = document.getElementById('modal-filename');
     elBoatNameInput = document.getElementById('boat-name-input');
     elBtnModalOk    = document.getElementById('btn-modal-ok');
+    elStatsStart    = document.getElementById('stats-start');
+    elStatsEnd      = document.getElementById('stats-end');
+    elStatsContent  = document.getElementById('stats-content');
 
     MapManager.init();
     Analysis.init();
@@ -101,6 +118,8 @@ const App = (() => {
     document.getElementById('tab-twd').addEventListener('click', () => switchView('twd'));
     document.getElementById('tab-gybe').addEventListener('click', () => switchView('gybe'));
     document.getElementById('tab-graph').addEventListener('click', () => switchView('graph'));
+    document.getElementById('tab-stats').addEventListener('click', () => switchView('stats'));
+    document.getElementById('btn-stats-apply').addEventListener('click', () => renderStatsTab());
 
     // Populate speed selector
     Playback.SPEEDS.forEach(s => {
@@ -262,6 +281,7 @@ const App = (() => {
     if (currentView === 'twd')  renderTwdTable();
     if (currentView === 'gybe') renderGybeTable();
     if (currentView === 'graph') Graph.render(collectGraphData());
+    if (currentView === 'stats') renderStatsTab();
 
     recalcPlaybackRange();
     renderGraphControls();
@@ -408,13 +428,15 @@ const App = (() => {
     document.getElementById('tab-twd').classList.toggle('active', view === 'twd');
     document.getElementById('tab-gybe').classList.toggle('active', view === 'gybe');
     document.getElementById('tab-graph').classList.toggle('active', view === 'graph');
+    document.getElementById('tab-stats').classList.toggle('active', view === 'stats');
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
     document.getElementById('gybe-container').classList.toggle('view-hidden', view !== 'gybe');
     document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
+    document.getElementById('stats-container').classList.toggle('view-hidden', view !== 'stats');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
-    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph');
+    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats');
     elBtnRuler.classList.toggle('view-hidden', view !== 'map');
     if (view !== 'map' && rulerMode) {
       rulerMode = false;
@@ -426,6 +448,7 @@ const App = (() => {
     if (view === 'twd')  renderTwdTable();
     if (view === 'gybe') renderGybeTable();
     if (view === 'graph') Graph.render(collectGraphData());
+    if (view === 'stats') renderStatsTab();
   }
 
   function collectUpwindData() {
@@ -919,6 +942,77 @@ const App = (() => {
       'Gybe');
   }
 
+  // ── Statistics tab ────────────────────────────────────────────────────────────
+
+  function getStatValue(entry, row, startTs, endTs) {
+    if (row.mode === 'avg' || row.mode === 'avgAbs') {
+      const series = getFieldSeries(entry, row.key);
+      if (!series) return null;
+      const slice = sliceSeriesByTs(series, startTs, endTs);
+      if (slice.length === 0) return null;
+      const sum = slice.reduce((s, p) => s + (row.mode === 'avgAbs' ? Math.abs(p.val) : p.val), 0);
+      return sum / slice.length;
+    }
+    if (row.mode === 'circular') {
+      const stats = twdWindowStats(entry, startTs, endTs);
+      return stats ? stats.mean : null;
+    }
+    if (row.mode === 'polBsp') {
+      // target polar BSP = actual BSP / (Pol0% / 100)
+      const bspSeries = getFieldSeries(entry, 'BSP');
+      const polSeries = getFieldSeries(entry, 'Pol0%');
+      if (!bspSeries || !polSeries) return null;
+      const slice = sliceSeriesByTs(bspSeries, startTs, endTs);
+      if (slice.length === 0) return null;
+      let sum = 0, count = 0;
+      for (const { ts, val: bsp } of slice) {
+        const pol = carryForward(polSeries, ts);
+        if (pol !== null && pol > 0) { sum += bsp * 100 / pol; count++; }
+      }
+      return count > 0 ? sum / count : null;
+    }
+    return null;
+  }
+
+  function renderStatsTab() {
+    const { trimStart, trimEnd } = Playback.getState();
+    if (!elStatsStart.value) elStatsStart.value = fmtUTC(trimStart);
+    if (!elStatsEnd.value)   elStatsEnd.value   = fmtUTC(trimEnd);
+
+    const startTs = parseUTCTime(elStatsStart.value, trimStart) ?? trimStart;
+    const endTs   = parseUTCTime(elStatsEnd.value,   trimStart) ?? trimEnd;
+
+    if (boats.size === 0) {
+      elStatsContent.innerHTML = '<p class="twd-empty">No log files loaded.</p>';
+      return;
+    }
+
+    const boatEntries = [...boats.values()];
+
+    let html = '<table class="stats-table"><thead><tr><th>Variable</th><th>Unit</th>';
+    for (const { boat } of boatEntries) {
+      html += `<th><span class="boat-dot" style="background:${boat.color};margin-right:5px"></span>${boat.name}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    for (const row of STATS_ROWS) {
+      html += `<tr><td class="stats-var">${row.label}</td><td class="stats-unit">${row.unit}</td>`;
+      for (const entry of boatEntries) {
+        const val = getStatValue(entry, row, startTs, endTs);
+        html += `<td>${formatStat(val, row.unit)}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    elStatsContent.innerHTML = html;
+  }
+
+  function formatStat(val, unit) {
+    if (val === null) return '—';
+    const dp = unit === 'kts' ? 2 : 1;
+    return val.toFixed(dp) + '\u00a0' + unit;
+  }
+
   // ── Graph tab ─────────────────────────────────────────────────────────────────
 
   function fmtUTC(ms) {
@@ -1225,6 +1319,7 @@ const App = (() => {
         if (currentView === 'twd')  renderTwdTable();
         if (currentView === 'gybe') renderGybeTable();
         if (currentView === 'graph') Graph.render(collectGraphData());
+        if (currentView === 'stats') renderStatsTab();
         renderBoatList();
         renderVariablePanel();
         updateAddVarDropdown();
