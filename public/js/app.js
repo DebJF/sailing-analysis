@@ -1017,7 +1017,7 @@ const App = (() => {
   function formatStat(stat, unit) {
     if (stat === null) return '—';
     const dp = unit === 'kts' ? 2 : 1;
-    return `${stat.mean.toFixed(dp)}\u00a0${unit} <span class="stats-sd">(±${stat.sd.toFixed(dp)})</span>`;
+    return `${stat.mean.toFixed(dp)} <span class="stats-sd">(±${stat.sd.toFixed(dp)})</span>`;
   }
 
   // ── Graph tab ─────────────────────────────────────────────────────────────────
