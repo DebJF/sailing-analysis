@@ -979,6 +979,11 @@ const App = (() => {
     popup.appendChild(manualBtn);
     document.body.appendChild(popup);
 
+    // Clamp popup into viewport after it's in the DOM and has a measured size
+    const pr = popup.getBoundingClientRect();
+    if (pr.bottom > window.innerHeight) popup.style.top  = (clientY - pr.height - 8) + 'px';
+    if (pr.right  > window.innerWidth)  popup.style.left = (clientX - pr.width  - 8) + 'px';
+
     outsideClick = e => { if (!popup.contains(e.target)) dismiss(); };
     setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
   }
