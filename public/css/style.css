@@ -503,6 +503,19 @@ body {
 #wind-interval { flex-shrink: 0; min-width: 62px; }
 .hidden-control { display: none; }
 .wind-barb-icon { background: none !important; border: none !important; }
+.ruler-label {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid #1e88e5;
+  border-radius: 3px;
+  padding: 2px 7px;
+  font-size: 12px;
+  font-family: system-ui, sans-serif;
+  color: #1a2b3c;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  display: inline-block;
+}
 .nm-scale-bar {
   border: 2px solid rgba(0,0,0,0.55);
   border-top: none;

@@ -44,6 +44,7 @@ const App = (() => {
 
   // Whether track is coloured by tack
   let tackColorMode = false;
+  let rulerMode = false;
 
   // Wind barbs
   let windBarbsVisible = false;
@@ -57,7 +58,7 @@ const App = (() => {
   let elEmptyOverlay, elVarList, elAddVarSelect, elBoatList,
       elBtnPlay, elBtnRewind, elBtnFF,
       elBtnTrimStart, elBtnTrimEnd, elBtnClearTrim, elBtnTackColor,
-      elBtnWind, elWindInterval,
+      elBtnWind, elWindInterval, elBtnRuler,
       elScrubber, elSpeedSelect, elTimeDisplay,
       elModal, elModalFilename, elBoatNameInput, elBtnModalOk;
 
@@ -81,6 +82,7 @@ const App = (() => {
     elBtnTackColor  = document.getElementById('btn-tack-color');
     elBtnWind       = document.getElementById('btn-wind');
     elWindInterval  = document.getElementById('wind-interval');
+    elBtnRuler      = document.getElementById('btn-ruler');
     elModal         = document.getElementById('name-modal');
     elModalFilename = document.getElementById('modal-filename');
     elBoatNameInput = document.getElementById('boat-name-input');
@@ -182,6 +184,13 @@ const App = (() => {
           MapManager.clearTackMode(entry.boat);
         }
       }
+    });
+
+    elBtnRuler.addEventListener('click', () => {
+      rulerMode = !rulerMode;
+      elBtnRuler.classList.toggle('active', rulerMode);
+      if (rulerMode) MapManager.activateRuler();
+      else           MapManager.deactivateRuler();
     });
 
     // Modal
@@ -394,6 +403,12 @@ const App = (() => {
     document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('controls').classList.toggle('view-hidden', view === 'graph');
+    elBtnRuler.classList.toggle('view-hidden', view !== 'map');
+    if (view !== 'map' && rulerMode) {
+      rulerMode = false;
+      elBtnRuler.classList.remove('active');
+      MapManager.deactivateRuler();
+    }
     if (view === 'map')     MapManager.invalidateSize();
     if (view === 'beating') Analysis.render(collectUpwindData());
     if (view === 'twd')  renderTwdTable();

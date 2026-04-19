@@ -271,7 +271,81 @@ const MapManager = (() => {
     e.windBarbs   = [];
   }
 
+  // ── Ruler ─────────────────────────────────────────────────────────────────────
+
+  let _rulerOn    = false;
+  let _rulerWait  = false;   // true = A placed, awaiting B
+  let _rulerA     = null;
+  let _rulerElems = [];      // locked measurement layers (cleared on new measurement start)
+  let _rulerGhost = null;    // rubber-band line while moving
+
+  function _rulerFmt(metres) {
+    const nm = metres / 1852;
+    return nm >= 0.5 ? nm.toFixed(2) + '\u00a0nm' : Math.round(metres) + '\u00a0m';
+  }
+
+  function _rulerClearLocked() {
+    _rulerElems.forEach(el => el.remove());
+    _rulerElems = [];
+  }
+
+  function _rulerOnClick(e) {
+    if (!_rulerWait) {
+      _rulerClearLocked();
+      if (_rulerGhost) { _rulerGhost.remove(); _rulerGhost = null; }
+      _rulerA    = e.latlng;
+      _rulerWait = true;
+      _rulerElems.push(
+        L.circleMarker(e.latlng, { radius: 4, color: '#1e88e5', fillColor: '#1e88e5', fillOpacity: 1, weight: 2 }).addTo(map)
+      );
+    } else {
+      const B    = e.latlng;
+      const dist = map.distance(_rulerA, B);
+      const mid  = L.latLng((_rulerA.lat + B.lat) / 2, (_rulerA.lng + B.lng) / 2);
+      _rulerElems.push(
+        L.circleMarker(B, { radius: 4, color: '#1e88e5', fillColor: '#1e88e5', fillOpacity: 1, weight: 2 }).addTo(map),
+        L.polyline([_rulerA, B], { color: '#1e88e5', weight: 2, dashArray: '6 4' }).addTo(map),
+        L.marker(mid, {
+          icon: L.divIcon({ html: `<div class="ruler-label">${_rulerFmt(dist)}</div>`, className: '' }),
+          interactive: false,
+          zIndexOffset: 2000,
+        }).addTo(map)
+      );
+      if (_rulerGhost) { _rulerGhost.remove(); _rulerGhost = null; }
+      _rulerWait = false;
+    }
+  }
+
+  function _rulerOnMove(e) {
+    if (!_rulerWait) return;
+    if (!_rulerGhost) {
+      _rulerGhost = L.polyline([_rulerA, e.latlng], { color: '#1e88e5', weight: 1.5, dashArray: '4 4', opacity: 0.55 }).addTo(map);
+    } else {
+      _rulerGhost.setLatLngs([_rulerA, e.latlng]);
+    }
+  }
+
+  function activateRuler() {
+    if (_rulerOn) return;
+    _rulerOn = true;
+    map.getContainer().style.cursor = 'crosshair';
+    map.on('click',     _rulerOnClick);
+    map.on('mousemove', _rulerOnMove);
+  }
+
+  function deactivateRuler() {
+    if (!_rulerOn) return;
+    _rulerOn = false;
+    map.getContainer().style.cursor = '';
+    map.off('click',     _rulerOnClick);
+    map.off('mousemove', _rulerOnMove);
+    _rulerClearLocked();
+    if (_rulerGhost) { _rulerGhost.remove(); _rulerGhost = null; }
+    _rulerWait = false;
+    _rulerA    = null;
+  }
+
   function invalidateSize() { if (map) map.invalidateSize(); }
 
-  return { init, addBoat, removeBoat, updateMarker, setTrim, clearTrim, setTackMode, clearTackMode, showWindBarbs, hideWindBarbs, invalidateSize };
+  return { init, addBoat, removeBoat, updateMarker, setTrim, clearTrim, setTackMode, clearTackMode, showWindBarbs, hideWindBarbs, invalidateSize, activateRuler, deactivateRuler };
 })();
