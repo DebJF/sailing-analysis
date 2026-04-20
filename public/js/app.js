@@ -50,8 +50,8 @@ const App = (() => {
     { key: 'AWS',   label: 'AWS',       unit: 'kts', mode: 'avg'      },
     { key: 'TWA',   label: '|TWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'AWA',      label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
-    { key: 'AWA',      label: 'AWA Port',  unit: '°',   mode: 'avgAbsTack', tack: 'port' },
-    { key: 'AWA',      label: 'AWA Stbd',  unit: '°',   mode: 'avgAbsTack', tack: 'stbd' },
+    { key: 'AWA',      label: 'AWA Port',  unit: '°',   mode: 'avgAbs', tack: 'port' },
+    { key: 'AWA',      label: 'AWA Stbd',  unit: '°',   mode: 'avgAbs', tack: 'stbd' },
     { key: 'Targ Twa', label: 'Targ TWA',  unit: '°',   mode: 'avg'      },
     { key: 'Targ Bsp', label: 'Targ BSP',  unit: 'kts', mode: 'avg'      },
     { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg', excludeTacks: true },
@@ -1024,21 +1024,10 @@ const App = (() => {
         slice = slice.filter(p => !tackIntervals.some(([from, to]) => p.ts >= from && p.ts <= to));
         if (slice.length === 0) return null;
       }
+      if (row.tack === 'port') slice = slice.filter(p => p.val < 0);
+      else if (row.tack === 'stbd') slice = slice.filter(p => p.val > 0);
+      if (slice.length === 0) return null;
       const vals = slice.map(p => row.mode === 'avgAbs' ? Math.abs(p.val) : p.val);
-      const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
-      const se   = computeSE(vals.reduce((s, v) => s + (v - mean) ** 2, 0), vals.length);
-      return { mean, se };
-    }
-    if (row.mode === 'avgAbsTack') {
-      const series = getFieldSeries(entry, row.key);
-      if (!series) return null;
-      let slice = sliceSeriesByTs(series, startTs, endTs);
-      if (slice.length === 0) return null;
-      if (tackIntervals && tackIntervals.length > 0)
-        slice = slice.filter(p => !tackIntervals.some(([from, to]) => p.ts >= from && p.ts <= to));
-      slice = slice.filter(p => row.tack === 'port' ? p.val < 0 : p.val > 0);
-      if (slice.length === 0) return null;
-      const vals = slice.map(p => Math.abs(p.val));
       const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
       const se   = computeSE(vals.reduce((s, v) => s + (v - mean) ** 2, 0), vals.length);
       return { mean, se };
