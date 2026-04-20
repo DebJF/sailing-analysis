@@ -52,11 +52,11 @@ const App = (() => {
     { key: 'AWA',      label: '|AWA|',     unit: '°',   mode: 'avgAbs'   },
     { key: 'Targ Twa', label: 'Targ TWA',  unit: '°',   mode: 'avg'      },
     { key: 'Targ Bsp', label: 'Targ BSP',  unit: 'kts', mode: 'avg'      },
-    { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg'      },
-    { key: 'PolBsp', label: 'PolBsp',    unit: 'kts', mode: 'avg'      },
+    { key: 'BSP',   label: 'BSP',       unit: 'kts', mode: 'avg', excludeTacks: true },
+    { key: 'PolBsp', label: 'PolBsp',    unit: 'kts', mode: 'avg', excludeTacks: true },
     { key: 'PolBsp%', label: 'PolBsp%',  unit: '%',   mode: 'avg', excludeTacks: true },
-    { key: 'VMG',   label: 'VMG',       unit: 'kts', mode: 'avg'      },
-    { key: 'VMG%',  label: 'VMG%',      unit: '%',   mode: 'avg'      },
+    { key: 'VMG',   label: 'VMG',       unit: 'kts', mode: 'avg', excludeTacks: true },
+    { key: 'VMG%',  label: 'VMG%',      unit: '%',   mode: 'avg', excludeTacks: true },
   ];
 
   // ── State ────────────────────────────────────────────────────────────────────
@@ -1012,16 +1012,14 @@ const App = (() => {
     return n > 1 ? Math.sqrt(sumSq / n / n) : 0;
   }
 
-  function getStatValue(entry, row, startTs, endTs, tacks) {
+  function getStatValue(entry, row, startTs, endTs, tackIntervals) {
     if (row.mode === 'avg' || row.mode === 'avgAbs') {
       const series = getFieldSeries(entry, row.key);
       if (!series) return null;
       let slice = sliceSeriesByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
-      if ((row.mode === 'avgAbs' || row.excludeTacks) && tacks && tacks.length > 0) {
-        slice = slice.filter(p => !tacks.some(
-          t => p.ts >= t.ts + TACK_INT_FROM && p.ts <= t.ts + TACK_INT_TO
-        ));
+      if ((row.mode === 'avgAbs' || row.excludeTacks) && tackIntervals && tackIntervals.length > 0) {
+        slice = slice.filter(p => !tackIntervals.some(([from, to]) => p.ts >= from && p.ts <= to));
         if (slice.length === 0) return null;
       }
       const vals = slice.map(p => row.mode === 'avgAbs' ? Math.abs(p.val) : p.val);
@@ -1182,7 +1180,9 @@ const App = (() => {
     }
 
     const boatEntries = [...boats.values()];
-    const boatTacks   = boatEntries.map(entry => detectTacks(entry));
+    const boatTackIntervals = boatEntries.map(entry =>
+      detectTacks(entry).map(t => [t.ts + TACK_INT_FROM, t.ts + TACK_INT_TO])
+    );
 
     let html = '';
     if (raceStartLine || raceFinishLine) html += renderRaceStatsSection(boatEntries);
@@ -1196,7 +1196,7 @@ const App = (() => {
     for (const row of STATS_ROWS) {
       html += `<tr><td class="stats-var">${row.label}</td><td class="stats-unit">${row.unit}</td>`;
       boatEntries.forEach((entry, i) => {
-        const val = getStatValue(entry, row, startTs, endTs, boatTacks[i]);
+        const val = getStatValue(entry, row, startTs, endTs, boatTackIntervals[i]);
         const series = getFieldSeries(entry, row.key);
         const warn = series ? hasSeriesGap(series, startTs, endTs) : false;
         html += `<td${warn ? ' class="stats-warn"' : ''}>${formatStat(val, row.unit)}</td>`;
