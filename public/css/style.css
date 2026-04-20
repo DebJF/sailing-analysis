@@ -764,3 +764,247 @@ body {
   font-weight: 500;
 }
 .modal-box button:hover { background: #1565c0; }
+
+/* ── Race tab ────────────────────────────────────────────────────────────────── */
+#race-container {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+#race-setup {
+  padding: 20px 24px 0;
+  max-width: 680px;
+}
+
+#race-results {
+  padding: 4px 24px 24px;
+  max-width: 680px;
+}
+
+.race-section {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.race-section h3 {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.race-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.race-radio-group label {
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+}
+
+.race-radio-group input[type="radio"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+#btn-place-start, #btn-place-finish {
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+}
+#btn-place-start:hover, #btn-place-finish:hover { background: #1565c0; }
+
+.race-start-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.race-start-time label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.race-date {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+#race-start-time-input {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 3px 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  width: 84px;
+  outline: none;
+}
+#race-start-time-input:focus { border-color: var(--accent); }
+
+#btn-race-from-playback { font-size: 11px; }
+
+.race-results-section { margin-top: 20px; }
+
+.race-results-section h3 {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.race-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 320px;
+}
+
+.race-table th {
+  text-align: left;
+  padding: 6px 12px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.race-table td {
+  padding: 5px 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--panel2);
+  font-variant-numeric: tabular-nums;
+}
+
+.race-table tr:hover td { background: var(--panel2); }
+
+.race-boat-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.race-no-data {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.race-line-label {
+  color: #fff;
+  font-size: 11px;
+  font-family: system-ui, sans-serif;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  display: inline-block;
+}
+
+#line-placer-hint {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 136, 229, 0.92);
+  color: #fff;
+  font-size: 12px;
+  font-family: system-ui, sans-serif;
+  padding: 5px 14px;
+  border-radius: 4px;
+  z-index: 600;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ── Race stats section (Statistics tab) ─────────────────────────────────── */
+
+.stats-section-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+
+.race-stats-block {
+  margin-bottom: 16px;
+}
+
+.race-stats-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.race-stats-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+}
+
+.irc-ratings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.stats-section-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+
+.irc-rating-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.irc-input {
+  width: 64px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--mono, monospace);
+  padding: 2px 5px;
+  text-align: right;
+}
+
+.irc-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.stats-warn {
+  color: #e57373;
+}

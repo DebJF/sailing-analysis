@@ -17,6 +17,24 @@ const App = (() => {
   const STBD_COLOR = '#43a047';
   const ABS_TACK_VARS = new Set(['AWA', 'TWA']);
 
+  const RACE_LINES = {
+    jog: {
+      label: 'JOG',
+      a: { lat: 50.770317, lon: -1.313983 },  // Gurnard buoy
+      b: { lat: 50.767107, lon: -1.311747 },  // Shore flagpole
+    },
+    'rorc-west': {
+      label: 'RORC West-going',
+      a: { lat: 50.786667, lon: -1.309167 },  // Williams Shipping
+      b: { lat: 50.766700, lon: -1.300932 },  // Flagpole
+    },
+    'rorc-east': {
+      label: 'RORC East-going',
+      a: { lat: 50.782983, lon: -1.295317 },  // South Bramble buoy
+      b: { lat: 50.766700, lon: -1.300932 },  // Flagpole (shared with RORC West)
+    },
+  };
+
   const STATS_ROWS = [
     { key: 'TWS',   label: 'TWS',       unit: 'kts', mode: 'avg'      },
     { key: 'TWD',   label: 'TWD',       unit: '°',   mode: 'circular' },
@@ -68,6 +86,16 @@ const App = (() => {
   // Wind barbs
   let windBarbsVisible = false;
   let windInterval = 10 * 60 * 1000; // 10 minutes in ms
+
+  // Race
+  const IRC_DEFAULTS = { bellino: 1.023, griffin: 1.035, mzungu: 1.031 };
+  const raceIrcRatings = new Map();  // boatName → user-entered IRC rating
+
+  let raceStartPreset = 'jog';
+  let raceFinishPreset = 'jog';
+  let raceStartLine  = RACE_LINES.jog;
+  let raceFinishLine = RACE_LINES.jog;
+  let raceStartTime  = null;  // ms UTC or null (no filter)
 
   // File queue for sequential name-prompt flow
   let fileQueue = [];
@@ -123,6 +151,7 @@ const App = (() => {
     document.getElementById('tab-graph').addEventListener('click', () => switchView('graph'));
     document.getElementById('tab-stats').addEventListener('click', () => switchView('stats'));
     document.getElementById('tab-about').addEventListener('click', () => switchView('about'));
+    document.getElementById('tab-race').addEventListener('click', () => switchView('race'));
     document.getElementById('btn-stats-apply').addEventListener('click', () => renderStatsTab());
 
     // Populate speed selector
@@ -286,6 +315,7 @@ const App = (() => {
     if (currentView === 'gybe') renderGybeTable();
     if (currentView === 'graph') Graph.render(collectGraphData());
     if (currentView === 'stats') renderStatsTab();
+    updateRaceDisplay();
 
     recalcPlaybackRange();
     renderGraphControls();
@@ -434,6 +464,7 @@ const App = (() => {
     document.getElementById('tab-graph').classList.toggle('active', view === 'graph');
     document.getElementById('tab-stats').classList.toggle('active', view === 'stats');
     document.getElementById('tab-about').classList.toggle('active', view === 'about');
+    document.getElementById('tab-race').classList.toggle('active', view === 'race');
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
     document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
@@ -441,20 +472,28 @@ const App = (() => {
     document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
     document.getElementById('stats-container').classList.toggle('view-hidden', view !== 'stats');
     document.getElementById('about-container').classList.toggle('view-hidden', view !== 'about');
+    document.getElementById('race-container').classList.toggle('view-hidden', view !== 'race');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
-    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats' || view === 'about');
+    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats' || view === 'about' || view === 'race');
     elBtnRuler.classList.toggle('view-hidden', view !== 'map');
     if (view !== 'map' && rulerMode) {
       rulerMode = false;
       elBtnRuler.classList.remove('active');
       MapManager.deactivateRuler();
     }
+    if (view !== 'map') MapManager.deactivateLinePlacer();
     if (view === 'map')     MapManager.invalidateSize();
     if (view === 'beating') Analysis.render(collectUpwindData());
     if (view === 'twd')  renderTwdTable();
     if (view === 'gybe') renderGybeTable();
     if (view === 'graph') Graph.render(collectGraphData());
     if (view === 'stats') renderStatsTab();
+    if (view === 'race') {
+      renderRaceSetup();
+      MapManager.setRaceLine('start',  raceStartLine);
+      MapManager.setRaceLine('finish', raceFinishLine);
+      updateRaceDisplay();
+    }
   }
 
   function collectUpwindData() {
@@ -985,6 +1024,122 @@ const App = (() => {
     return null;
   }
 
+  function haversineNm(lat1, lon1, lat2, lon2) {
+    const R = 3440.065;
+    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(Δφ/2)**2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
+  function getIrcRating(boatName) {
+    if (raceIrcRatings.has(boatName)) return raceIrcRatings.get(boatName);
+    const lower = boatName.toLowerCase();
+    for (const [key, val] of Object.entries(IRC_DEFAULTS)) {
+      if (lower.includes(key)) return val;
+    }
+    return null;
+  }
+
+  function computeBoatRaceStats(entry, boatResult) {
+    const firstStart  = boatResult.startCrossings[0]  ?? null;
+    const firstFinish = boatResult.finishCrossings[0] ?? null;
+
+    const lateAtStart = (firstStart && raceStartTime !== null) ? firstStart.ts - raceStartTime : null;
+    const finishTime  = firstFinish ? firstFinish.ts : null;
+    const elapsed     = (finishTime !== null && raceStartTime !== null) ? finishTime - raceStartTime : null;
+    const irc         = getIrcRating(entry.boat.name);
+    const correctedTime = (elapsed !== null && irc !== null) ? elapsed * irc : null;
+
+    let distanceSailed = null;
+    if (firstStart && firstFinish) {
+      const bspSeries = getFieldSeries(entry, 'BSP');
+      if (bspSeries) {
+        const slice = sliceSeriesByTs(bspSeries, firstStart.ts, firstFinish.ts);
+        if (slice.length >= 2) {
+          let dist = 0;
+          for (let i = 1; i < slice.length; i++) {
+            const dtHrs = (slice[i].ts - slice[i-1].ts) / 3600000;
+            dist += ((slice[i].val + slice[i-1].val) / 2) * dtHrs;
+          }
+          distanceSailed = Math.max(0, dist);
+        }
+      }
+    }
+
+    let gpsDistance = null;
+    let hasDataGap = false;
+    if (firstStart && firstFinish) {
+      const rows = entry.boat.gpsRows.filter(r => r.ts >= firstStart.ts && r.ts <= firstFinish.ts);
+      if (rows.length >= 2) {
+        let dist = 0;
+        for (let i = 1; i < rows.length; i++) {
+          const gap = rows[i].ts - rows[i-1].ts;
+          if (gap > 60000) hasDataGap = true;
+          dist += haversineNm(rows[i-1].lat, rows[i-1].lon, rows[i].lat, rows[i].lon);
+        }
+        gpsDistance = dist;
+      } else {
+        hasDataGap = true;
+      }
+    }
+
+    return { lateAtStart, finishTime, elapsed, correctedTime, distanceSailed, gpsDistance, hasDataGap };
+  }
+
+  function renderRaceStatsSection(boatEntries) {
+    const raceResults = computeRaceResults();
+    const statsByBoat = boatEntries.map(entry => {
+      const boatResult = raceResults.find(r => r.name === entry.boat.name);
+      return boatResult ? computeBoatRaceStats(entry, boatResult) : null;
+    });
+
+    // IRC inputs row
+    let ircHtml = boatEntries.map(({ boat }) => {
+      const rating = raceIrcRatings.has(boat.name)
+        ? raceIrcRatings.get(boat.name)
+        : (getIrcRating(boat.name) ?? '');
+      return `<label class="irc-rating-label">
+        <span class="boat-dot" style="background:${boat.color}"></span>
+        ${boat.name}
+        <input class="irc-input" type="number" data-name="${boat.name}"
+          value="${rating}" step="0.001" min="0.5" max="2.0" placeholder="IRC">
+      </label>`;
+    }).join('');
+
+    const RACE_STAT_ROWS = [
+      { label: 'Late at start', fn: s => s.lateAtStart   !== null ? fmtDuration(s.lateAtStart)         : '—', warn: () => false },
+      { label: 'Finish (UTC)',  fn: s => s.finishTime    !== null ? fmtUTC(s.finishTime)                : '—', warn: () => false },
+      { label: 'Elapsed',       fn: s => s.elapsed       !== null ? fmtElapsed(s.elapsed)               : '—', warn: () => false },
+      { label: 'IRC corrected', fn: s => s.correctedTime !== null ? fmtElapsed(s.correctedTime)         : '—', warn: () => false },
+      { label: 'Dist sailed',   fn: s => s.distanceSailed!== null ? s.distanceSailed.toFixed(1) + ' nm' : '—', warn: s => s.hasDataGap },
+      { label: 'GPS distance',  fn: s => s.gpsDistance   !== null ? s.gpsDistance.toFixed(1) + ' nm'   : '—', warn: s => s.hasDataGap },
+    ];
+
+    let html = `<div class="race-stats-block">
+      <div class="race-stats-header">
+        <span class="race-stats-title">Race Statistics</span>
+      </div>
+      <div class="irc-ratings-row"><span class="stats-section-label">IRC Rating</span>${ircHtml}</div>
+      <table class="stats-table"><thead><tr>
+        <th>Stat</th><th></th>`;
+    for (const { boat } of boatEntries) {
+      html += `<th><span class="boat-dot" style="background:${boat.color};margin-right:5px"></span>${boat.name}</th>`;
+    }
+    html += `</tr></thead><tbody>`;
+    for (const { label, fn, warn } of RACE_STAT_ROWS) {
+      html += `<tr><td class="stats-var">${label}</td><td class="stats-unit"></td>`;
+      statsByBoat.forEach(s => {
+        const cls = (s && warn(s)) ? ' class="stats-warn"' : '';
+        html += `<td${cls}>${s ? fn(s) : '—'}</td>`;
+      });
+      html += `</tr>`;
+    }
+    html += `</tbody></table></div><div class="stats-section-divider"></div>`;
+    return html;
+  }
+
   function renderStatsTab() {
     const { trimStart, trimEnd } = Playback.getState();
     if (!elStatsStart.value) elStatsStart.value = fmtUTC(trimStart);
@@ -1001,7 +1156,10 @@ const App = (() => {
     const boatEntries = [...boats.values()];
     const boatTacks   = boatEntries.map(entry => detectTacks(entry));
 
-    let html = '<table class="stats-table"><thead><tr><th>Variable</th><th>Unit</th>';
+    let html = '';
+    if (raceStartLine || raceFinishLine) html += renderRaceStatsSection(boatEntries);
+
+    html += '<div class="race-stats-header"><span class="race-stats-title">Data for the selected time period</span></div><table class="stats-table"><thead><tr><th>Variable</th><th>Unit</th>';
     for (const { boat } of boatEntries) {
       html += `<th><span class="boat-dot" style="background:${boat.color};margin-right:5px"></span>${boat.name}</th>`;
     }
@@ -1017,6 +1175,15 @@ const App = (() => {
     }
     html += '</tbody></table>';
     elStatsContent.innerHTML = html;
+
+    elStatsContent.querySelectorAll('.irc-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const val = parseFloat(input.value);
+        if (!isNaN(val) && val > 0) raceIrcRatings.set(input.dataset.name, val);
+        else raceIrcRatings.delete(input.dataset.name);
+        renderStatsTab();
+      });
+    });
   }
 
   function formatStat(stat, unit) {
@@ -1332,6 +1499,7 @@ const App = (() => {
         if (currentView === 'gybe') renderGybeTable();
         if (currentView === 'graph') Graph.render(collectGraphData());
         if (currentView === 'stats') renderStatsTab();
+        updateRaceDisplay();
         renderBoatList();
         renderVariablePanel();
         updateAddVarDropdown();
@@ -1449,6 +1617,252 @@ const App = (() => {
 
   function cssId(name) {
     return name.replace(/[^a-zA-Z0-9]/g, '_');
+  }
+
+  // ── Race tab ──────────────────────────────────────────────────────────────────
+
+  function lineCrossing(p1, p2, lineA, lineB) {
+    const dx1 = p2.lon - p1.lon, dy1 = p2.lat - p1.lat;
+    const dx2 = lineB.lon - lineA.lon, dy2 = lineB.lat - lineA.lat;
+    const denom = dx1 * dy2 - dy1 * dx2;
+    if (Math.abs(denom) < 1e-12) return null;
+    const ox = lineA.lon - p1.lon, oy = lineA.lat - p1.lat;
+    const t = (ox * dy2 - oy * dx2) / denom;
+    const u = (ox * dy1 - oy * dx1) / denom;
+    return (t >= 0 && t <= 1 && u >= 0 && u <= 1) ? t : null;
+  }
+
+  function computeRaceResults() {
+    const results = [];
+    for (const [, entry] of boats) {
+      const rows = entry.boat.gpsRows;
+      const startCrossings = [], finishCrossings = [];
+      for (let i = 1; i < rows.length; i++) {
+        const p1 = rows[i - 1], p2 = rows[i];
+        if (raceStartLine) {
+          const t = lineCrossing(p1, p2, raceStartLine.a, raceStartLine.b);
+          if (t !== null) {
+            const ts = p1.ts + t * (p2.ts - p1.ts);
+            if (!raceStartTime || ts >= raceStartTime) {
+              startCrossings.push({
+                ts,
+                lat: p1.lat + t * (p2.lat - p1.lat),
+                lon: p1.lon + t * (p2.lon - p1.lon),
+              });
+            }
+          }
+        }
+        if (raceFinishLine) {
+          const t = lineCrossing(p1, p2, raceFinishLine.a, raceFinishLine.b);
+          if (t !== null) {
+            const ts = p1.ts + t * (p2.ts - p1.ts);
+            finishCrossings.push({
+              ts,
+              lat: p1.lat + t * (p2.lat - p1.lat),
+              lon: p1.lon + t * (p2.lon - p1.lon),
+            });
+          }
+        }
+      }
+      results.push({ name: entry.boat.name, color: entry.boat.color, startCrossings, finishCrossings });
+    }
+    return results;
+  }
+
+  function fmtDuration(ms) {
+    const totalS = Math.round(ms / 1000);
+    const sign   = totalS < 0 ? '-' : '+';
+    const abs    = Math.abs(totalS);
+    const h = Math.floor(abs / 3600);
+    const m = Math.floor((abs % 3600) / 60);
+    const s = abs % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${sign}${h}:${mm}:${ss}` : `${sign}${m}:${ss}`;
+  }
+
+  function fmtElapsed(ms) {
+    const totalS = Math.round(Math.abs(ms / 1000));
+    const h = Math.floor(totalS / 3600);
+    const m = Math.floor((totalS % 3600) / 60);
+    const s = totalS % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+  }
+
+  function renderRaceSetup() {
+    const el = document.getElementById('race-setup');
+    if (!el) return;
+
+    let dateStr = '';
+    if (boats.size > 0) {
+      const d = new Date(boats.values().next().value.boat.minTs);
+      dateStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    }
+
+    const presetKeys = [...Object.keys(RACE_LINES), 'custom'];
+    const presetLabel = k => k === 'custom' ? 'Custom' : RACE_LINES[k].label;
+    const startTimeVal = raceStartTime ? fmtUTC(raceStartTime) : '';
+
+    const radioRow = (name, current) => presetKeys.map(k =>
+      `<label><input type="radio" name="${name}" value="${k}"${current === k ? ' checked' : ''}> ${presetLabel(k)}</label>`
+    ).join('');
+
+    el.innerHTML = `
+      <div class="race-section">
+        <h3>Start Line</h3>
+        <div class="race-radio-group">${radioRow('race-start', raceStartPreset)}</div>
+        <button id="btn-place-start"${raceStartPreset !== 'custom' ? ' class="hidden-control"' : ''}>Place on map ↗</button>
+        <div class="race-start-time">
+          <label for="race-start-time-input">Start time (UTC)${dateStr ? ` <span class="race-date">${dateStr}</span>` : ''}</label>
+          <input type="text" id="race-start-time-input" placeholder="HH:MM:SS" value="${startTimeVal}" autocomplete="off">
+          <button id="btn-race-from-playback">← playback</button>
+        </div>
+      </div>
+      <div class="race-section">
+        <h3>Finish Line</h3>
+        <div class="race-radio-group">${radioRow('race-finish', raceFinishPreset)}</div>
+        <button id="btn-place-finish"${raceFinishPreset !== 'custom' ? ' class="hidden-control"' : ''}>Place on map ↗</button>
+      </div>`;
+
+    el.querySelectorAll('input[name="race-start"]').forEach(r => {
+      r.addEventListener('change', () => {
+        raceStartPreset = r.value;
+        document.getElementById('btn-place-start').classList.toggle('hidden-control', raceStartPreset !== 'custom');
+        raceStartLine = raceStartPreset !== 'custom' ? RACE_LINES[raceStartPreset] : null;
+        MapManager.setRaceLine('start', raceStartLine);
+        updateRaceDisplay();
+      });
+    });
+
+    el.querySelectorAll('input[name="race-finish"]').forEach(r => {
+      r.addEventListener('change', () => {
+        raceFinishPreset = r.value;
+        document.getElementById('btn-place-finish').classList.toggle('hidden-control', raceFinishPreset !== 'custom');
+        raceFinishLine = raceFinishPreset !== 'custom' ? RACE_LINES[raceFinishPreset] : null;
+        MapManager.setRaceLine('finish', raceFinishLine);
+        updateRaceDisplay();
+      });
+    });
+
+    document.getElementById('btn-place-start').addEventListener('click', () => {
+      if (rulerMode) { rulerMode = false; elBtnRuler.classList.remove('active'); MapManager.deactivateRuler(); }
+      switchView('map');
+      MapManager.activateLinePlacer(coords => {
+        raceStartPreset = 'custom';
+        raceStartLine   = { a: { lat: coords.a.lat, lon: coords.a.lng }, b: { lat: coords.b.lat, lon: coords.b.lng } };
+        MapManager.setRaceLine('start', raceStartLine);
+        switchView('race');
+        updateRaceDisplay();
+      });
+    });
+
+    document.getElementById('btn-place-finish').addEventListener('click', () => {
+      if (rulerMode) { rulerMode = false; elBtnRuler.classList.remove('active'); MapManager.deactivateRuler(); }
+      switchView('map');
+      MapManager.activateLinePlacer(coords => {
+        raceFinishPreset = 'custom';
+        raceFinishLine   = { a: { lat: coords.a.lat, lon: coords.a.lng }, b: { lat: coords.b.lat, lon: coords.b.lng } };
+        MapManager.setRaceLine('finish', raceFinishLine);
+        switchView('race');
+        updateRaceDisplay();
+      });
+    });
+
+    document.getElementById('race-start-time-input').addEventListener('input', e => {
+      const refTs = boats.size > 0 ? boats.values().next().value.boat.minTs : Date.now();
+      raceStartTime = parseUTCTime(e.target.value, refTs);
+      updateRaceDisplay();
+    });
+
+    document.getElementById('btn-race-from-playback').addEventListener('click', () => {
+      const ts = Playback.getState().currentTs;
+      raceStartTime = ts;
+      document.getElementById('race-start-time-input').value = fmtUTC(ts);
+      updateRaceDisplay();
+    });
+  }
+
+  function renderRaceResults(results) {
+    const el = document.getElementById('race-results');
+    if (!el) return;
+
+    if (!results || boats.size === 0) {
+      el.innerHTML = '<p class="race-no-data">No log files loaded.</p>';
+      return;
+    }
+
+    // Earliest start crossing for elapsed calculation
+    let firstStartTs = null;
+    for (const { startCrossings } of results) {
+      for (const c of startCrossings) {
+        if (firstStartTs === null || c.ts < firstStartTs) firstStartTs = c.ts;
+      }
+    }
+
+    const startLabel = raceStartTime
+      ? `Start crossings after ${fmtUTC(raceStartTime)} UTC`
+      : 'Start crossings (no start time set — showing all)';
+
+    const hasStart  = results.some(r => r.startCrossings.length  > 0);
+    const hasFinish = results.some(r => r.finishCrossings.length > 0);
+
+    let html = `<div class="race-results-section"><h3>${startLabel}</h3>`;
+    if (!hasStart) {
+      html += `<p class="race-no-data">No crossings detected${!raceStartLine ? ' — start line not defined' : ''}.</p>`;
+    } else {
+      html += `<table class="race-table"><thead><tr>
+        <th>Boat</th><th>Time (UTC)</th><th>From gun</th>
+      </tr></thead><tbody>`;
+      for (const { name, color, startCrossings } of results) {
+        for (const c of startCrossings) {
+          const fromGun = raceStartTime !== null ? fmtDuration(c.ts - raceStartTime) : '—';
+          html += `<tr>
+            <td><span class="race-boat-swatch" style="background:${color}"></span>${name}</td>
+            <td>${fmtUTC(c.ts)}</td>
+            <td>${fromGun}</td>
+          </tr>`;
+        }
+      }
+      html += `</tbody></table>`;
+    }
+    html += `</div>`;
+
+    html += `<div class="race-results-section"><h3>Finish crossings</h3>`;
+    if (!hasFinish) {
+      html += `<p class="race-no-data">No crossings detected${!raceFinishLine ? ' — finish line not defined' : ''}.</p>`;
+    } else {
+      html += `<table class="race-table"><thead><tr>
+        <th>Boat</th><th>Time (UTC)</th><th>Elapsed</th>
+      </tr></thead><tbody>`;
+      for (const { name, color, finishCrossings } of results) {
+        for (const c of finishCrossings) {
+          const elapsed = firstStartTs !== null ? fmtElapsed(c.ts - firstStartTs) : '—';
+          html += `<tr>
+            <td><span class="race-boat-swatch" style="background:${color}"></span>${name}</td>
+            <td>${fmtUTC(c.ts)}</td>
+            <td>${elapsed}</td>
+          </tr>`;
+        }
+      }
+      html += `</tbody></table>`;
+    }
+    html += `</div>`;
+
+    el.innerHTML = html;
+  }
+
+  function updateRaceDisplay() {
+    const results = computeRaceResults();
+    // Always keep crossing markers on the map up-to-date
+    MapManager.setRaceCrossings(
+      results.flatMap(r => [
+        ...r.startCrossings.map(c => ({ lat: c.lat, lon: c.lon, color: r.color })),
+        ...r.finishCrossings.map(c => ({ lat: c.lat, lon: c.lon, color: r.color })),
+      ])
+    );
+    if (currentView === 'race') renderRaceResults(results);
   }
 
   return { init };

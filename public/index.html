@@ -20,6 +20,7 @@
       <button id="tab-graph"   class="tab-btn">Graph</button>
       <button id="tab-stats"   class="tab-btn">Statistics</button>
       <button id="tab-about"   class="tab-btn">About</button>
+      <button id="tab-race"    class="tab-btn">Race</button>
     </nav>
     <label class="upload-btn" title="Upload Expedition CSV log files">
       + Upload Files
@@ -33,6 +34,7 @@
     <!-- Map -->
     <div id="map-container">
       <div id="map"></div>
+      <div id="line-placer-hint" class="hidden"></div>
       <div id="empty-overlay">
         <div class="empty-message">
           <span class="icon">⚓</span>
@@ -99,6 +101,12 @@
         <button id="btn-stats-apply">Apply</button>
       </div>
       <div id="stats-content"></div>
+    </div>
+
+    <!-- Race -->
+    <div id="race-container" class="view-hidden">
+      <div id="race-setup"></div>
+      <div id="race-results"></div>
     </div>
 
     <!-- Graph -->

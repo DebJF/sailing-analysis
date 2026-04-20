@@ -347,5 +347,126 @@ const MapManager = (() => {
 
   function invalidateSize() { if (map) map.invalidateSize(); }
 
-  return { init, addBoat, removeBoat, updateMarker, setTrim, clearTrim, setTackMode, clearTackMode, showWindBarbs, hideWindBarbs, invalidateSize, activateRuler, deactivateRuler };
+  // ── Race line overlays ────────────────────────────────────────────────────────
+
+  let _startLineElems = [];
+  let _finishLineElems = [];
+  let _crossingElems  = [];
+
+  function setRaceLine(type, coords) {
+    const arr = type === 'start' ? _startLineElems : _finishLineElems;
+    arr.forEach(el => el.remove());
+    if (type === 'start') _startLineElems = []; else _finishLineElems = [];
+    if (!coords) return;
+
+    const color = '#000000';
+    const label = type === 'start' ? 'Start' : 'Finish';
+    const a   = [coords.a.lat, coords.a.lon];
+    const b   = [coords.b.lat, coords.b.lon];
+    const mid = [(coords.a.lat + coords.b.lat) / 2, (coords.a.lon + coords.b.lon) / 2];
+
+    const newElems = [
+      L.polyline([a, b], { color, weight: 2.5, dashArray: '8 5', opacity: 0.9 }).addTo(map),
+      L.circleMarker(a, { radius: 5, color, fillColor: color, fillOpacity: 0.9, weight: 2 }).addTo(map),
+      L.circleMarker(b, { radius: 5, color, fillColor: color, fillOpacity: 0.9, weight: 2 }).addTo(map),
+      L.marker(mid, {
+        icon: L.divIcon({
+          html: `<div class="race-line-label" style="background:${color}">${label}</div>`,
+          className: '',
+        }),
+        interactive: false,
+        zIndexOffset: 1500,
+      }).addTo(map),
+    ];
+
+    if (type === 'start') _startLineElems = newElems; else _finishLineElems = newElems;
+  }
+
+  function setRaceCrossings(crossings) {
+    _crossingElems.forEach(el => el.remove());
+    _crossingElems = crossings.map(({ lat, lon, color }) =>
+      L.circleMarker([lat, lon], {
+        radius: 5, color: '#fff', fillColor: color, fillOpacity: 1, weight: 1.5,
+      }).addTo(map)
+    );
+  }
+
+  // ── Line placer (two-click custom line placement) ──────────────────────────────
+
+  let _placerActive   = false;
+  let _placerWait     = false;
+  let _placerA        = null;
+  let _placerGhost    = null;
+  let _placerTmpElems = [];
+  let _placerCallback = null;
+
+  function _placerHint(msg) {
+    const el = document.getElementById('line-placer-hint');
+    if (!el) return;
+    if (msg) { el.textContent = msg; el.classList.remove('hidden'); }
+    else       el.classList.add('hidden');
+  }
+
+  function _placerClear() {
+    _placerTmpElems.forEach(el => el.remove());
+    _placerTmpElems = [];
+  }
+
+  function _placerOnClick(e) {
+    if (!_placerWait) {
+      _placerClear();
+      if (_placerGhost) { _placerGhost.remove(); _placerGhost = null; }
+      _placerA    = e.latlng;
+      _placerWait = true;
+      _placerTmpElems.push(
+        L.circleMarker(e.latlng, { radius: 5, color: '#fff', fillColor: '#fff', fillOpacity: 0.9, weight: 2 }).addTo(map)
+      );
+      _placerHint('Click to place point 2 of 2');
+    } else {
+      const B = e.latlng;
+      if (_placerGhost) { _placerGhost.remove(); _placerGhost = null; }
+      const cb = _placerCallback;
+      const A  = _placerA;
+      deactivateLinePlacer();
+      if (cb) cb({ a: A, b: B });
+    }
+  }
+
+  function _placerOnMove(e) {
+    if (!_placerWait) return;
+    if (!_placerGhost) {
+      _placerGhost = L.polyline([_placerA, e.latlng], { color: '#fff', weight: 1.5, dashArray: '4 4', opacity: 0.6 }).addTo(map);
+    } else {
+      _placerGhost.setLatLngs([_placerA, e.latlng]);
+    }
+  }
+
+  function activateLinePlacer(callback) {
+    if (_placerActive) deactivateLinePlacer();
+    _placerActive   = true;
+    _placerWait     = false;
+    _placerA        = null;
+    _placerCallback = callback;
+    _placerClear();
+    map.getContainer().style.cursor = 'crosshair';
+    map.on('click',     _placerOnClick);
+    map.on('mousemove', _placerOnMove);
+    _placerHint('Click to place point 1 of 2');
+  }
+
+  function deactivateLinePlacer() {
+    if (!_placerActive) return;
+    _placerActive = false;
+    map.getContainer().style.cursor = '';
+    map.off('click',     _placerOnClick);
+    map.off('mousemove', _placerOnMove);
+    _placerClear();
+    if (_placerGhost) { _placerGhost.remove(); _placerGhost = null; }
+    _placerWait     = false;
+    _placerA        = null;
+    _placerCallback = null;
+    _placerHint(null);
+  }
+
+  return { init, addBoat, removeBoat, updateMarker, setTrim, clearTrim, setTackMode, clearTackMode, showWindBarbs, hideWindBarbs, invalidateSize, activateRuler, deactivateRuler, setRaceLine, setRaceCrossings, activateLinePlacer, deactivateLinePlacer };
 })();
