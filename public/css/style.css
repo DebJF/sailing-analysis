@@ -895,7 +895,8 @@ body {
 }
 
 .race-table tr:hover td { background: var(--panel2); }
-.race-finish-selected td { color: var(--accent); }
+.race-row-selected td { color: var(--text); }
+.race-row-unselected td { color: var(--accent); }
 
 .race-boat-swatch {
   display: inline-block;
