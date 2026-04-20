@@ -354,9 +354,9 @@ const MapManager = (() => {
   let _crossingElems  = [];
 
   function setRaceLine(type, coords) {
-    const arr = type === 'start' ? _startLineElems : _finishLineElems;
-    arr.forEach(el => el.remove());
-    if (type === 'start') _startLineElems = []; else _finishLineElems = [];
+    const isStart = type === 'start';
+    (isStart ? _startLineElems : _finishLineElems).forEach(el => el.remove());
+    if (isStart) _startLineElems = []; else _finishLineElems = [];
     if (!coords) return;
 
     const color = '#000000';
@@ -379,7 +379,7 @@ const MapManager = (() => {
       }).addTo(map),
     ];
 
-    if (type === 'start') _startLineElems = newElems; else _finishLineElems = newElems;
+    if (isStart) _startLineElems = newElems; else _finishLineElems = newElems;
   }
 
   function setRaceCrossings(crossings) {

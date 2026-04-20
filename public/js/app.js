@@ -35,6 +35,15 @@ const App = (() => {
     },
   };
 
+  const RACE_STAT_ROWS = [
+    { label: 'Late at start', fn: s => s.lateAtStart   !== null ? fmtDuration(s.lateAtStart)         : '—', warn: () => false },
+    { label: 'Finish (UTC)',  fn: s => s.finishTime    !== null ? fmtUTC(s.finishTime)                : '—', warn: () => false },
+    { label: 'Elapsed',       fn: s => s.elapsed       !== null ? fmtElapsed(s.elapsed)               : '—', warn: () => false },
+    { label: 'IRC corrected', fn: s => s.correctedTime !== null ? fmtElapsed(s.correctedTime)         : '—', warn: () => false },
+    { label: 'Dist sailed',   fn: s => s.distanceSailed!== null ? s.distanceSailed.toFixed(1) + ' nm' : '—', warn: s => s.hasBspGap },
+    { label: 'GPS distance',  fn: s => s.gpsDistance   !== null ? s.gpsDistance.toFixed(1) + ' nm'   : '—', warn: s => s.hasDataGap },
+  ];
+
   const STATS_ROWS = [
     { key: 'TWS',   label: 'TWS',       unit: 'kts', mode: 'avg'      },
     { key: 'TWD',   label: 'TWD',       unit: '°',   mode: 'circular' },
@@ -1053,17 +1062,23 @@ const App = (() => {
     const correctedTime = (elapsed !== null && irc !== null) ? elapsed * irc : null;
 
     let distanceSailed = null;
+    let hasBspGap = false;
     if (firstStart && firstFinish) {
       const bspSeries = getFieldSeries(entry, 'BSP');
       if (bspSeries) {
         const slice = sliceSeriesByTs(bspSeries, firstStart.ts, firstFinish.ts);
         if (slice.length >= 2) {
+          if (slice[0].ts - firstStart.ts > 60000) hasBspGap = true;
+          if (firstFinish.ts - slice[slice.length - 1].ts > 60000) hasBspGap = true;
           let dist = 0;
           for (let i = 1; i < slice.length; i++) {
             const dtHrs = (slice[i].ts - slice[i-1].ts) / 3600000;
+            if (slice[i].ts - slice[i-1].ts > 60000) hasBspGap = true;
             dist += ((slice[i].val + slice[i-1].val) / 2) * dtHrs;
           }
           distanceSailed = Math.max(0, dist);
+        } else {
+          hasBspGap = true;
         }
       }
     }
@@ -1073,6 +1088,11 @@ const App = (() => {
     if (firstStart && firstFinish) {
       const rows = entry.boat.gpsRows.filter(r => r.ts >= firstStart.ts && r.ts <= firstFinish.ts);
       if (rows.length >= 2) {
+        // Check gap between start crossing and first GPS row (crossing may have been
+        // interpolated across a gap, so the pre-gap row was excluded by the filter)
+        if (rows[0].ts - firstStart.ts > 60000) hasDataGap = true;
+        // Check gap between last GPS row and finish crossing (same boundary issue)
+        if (firstFinish.ts - rows[rows.length - 1].ts > 60000) hasDataGap = true;
         let dist = 0;
         for (let i = 1; i < rows.length; i++) {
           const gap = rows[i].ts - rows[i-1].ts;
@@ -1085,7 +1105,7 @@ const App = (() => {
       }
     }
 
-    return { lateAtStart, finishTime, elapsed, correctedTime, distanceSailed, gpsDistance, hasDataGap };
+    return { lateAtStart, finishTime, elapsed, correctedTime, distanceSailed, gpsDistance, hasBspGap, hasDataGap };
   }
 
   function renderRaceStatsSection(boatEntries) {
@@ -1095,7 +1115,6 @@ const App = (() => {
       return boatResult ? computeBoatRaceStats(entry, boatResult) : null;
     });
 
-    // IRC inputs row
     let ircHtml = boatEntries.map(({ boat }) => {
       const rating = raceIrcRatings.has(boat.name)
         ? raceIrcRatings.get(boat.name)
@@ -1107,15 +1126,6 @@ const App = (() => {
           value="${rating}" step="0.001" min="0.5" max="2.0" placeholder="IRC">
       </label>`;
     }).join('');
-
-    const RACE_STAT_ROWS = [
-      { label: 'Late at start', fn: s => s.lateAtStart   !== null ? fmtDuration(s.lateAtStart)         : '—', warn: () => false },
-      { label: 'Finish (UTC)',  fn: s => s.finishTime    !== null ? fmtUTC(s.finishTime)                : '—', warn: () => false },
-      { label: 'Elapsed',       fn: s => s.elapsed       !== null ? fmtElapsed(s.elapsed)               : '—', warn: () => false },
-      { label: 'IRC corrected', fn: s => s.correctedTime !== null ? fmtElapsed(s.correctedTime)         : '—', warn: () => false },
-      { label: 'Dist sailed',   fn: s => s.distanceSailed!== null ? s.distanceSailed.toFixed(1) + ' nm' : '—', warn: s => s.hasDataGap },
-      { label: 'GPS distance',  fn: s => s.gpsDistance   !== null ? s.gpsDistance.toFixed(1) + ' nm'   : '—', warn: s => s.hasDataGap },
-    ];
 
     let html = `<div class="race-stats-block">
       <div class="race-stats-header">
