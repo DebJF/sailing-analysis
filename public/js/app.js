@@ -549,6 +549,14 @@ const App = (() => {
     return series.slice(start, lo);
   }
 
+  function hasSeriesGap(series, startTs, endTs) {
+    const slice = sliceSeriesByTs(series, startTs, endTs);
+    for (let i = 1; i < slice.length; i++) {
+      if (slice[i].ts - slice[i-1].ts > 60000) return true;
+    }
+    return false;
+  }
+
   // Returns {mean, range} for TWD in a time window, or null if no data
   function twdWindowStats(entry, fromTs, toTs) {
     const series = getFieldSeries(entry, 'TWD');
@@ -1189,7 +1197,9 @@ const App = (() => {
       html += `<tr><td class="stats-var">${row.label}</td><td class="stats-unit">${row.unit}</td>`;
       boatEntries.forEach((entry, i) => {
         const val = getStatValue(entry, row, startTs, endTs, boatTacks[i]);
-        html += `<td>${formatStat(val, row.unit)}</td>`;
+        const series = getFieldSeries(entry, row.key);
+        const warn = series ? hasSeriesGap(series, startTs, endTs) : false;
+        html += `<td${warn ? ' class="stats-warn"' : ''}>${formatStat(val, row.unit)}</td>`;
       });
       html += '</tr>';
     }
