@@ -1052,8 +1052,10 @@ const App = (() => {
   }
 
   function computeBoatRaceStats(entry, boatResult) {
-    const firstStart  = boatResult.startCrossings[0]  ?? null;
-    const firstFinish = boatResult.finishCrossings[0] ?? null;
+    const firstStart  = boatResult.startCrossings[0] ?? null;
+    const firstFinish = firstStart
+      ? (boatResult.finishCrossings.find(c => c.ts > firstStart.ts) ?? null)
+      : null;
 
     const lateAtStart = (firstStart && raceStartTime !== null) ? firstStart.ts - raceStartTime : null;
     const finishTime  = firstFinish ? firstFinish.ts : null;
@@ -1088,10 +1090,7 @@ const App = (() => {
     if (firstStart && firstFinish) {
       const rows = entry.boat.gpsRows.filter(r => r.ts >= firstStart.ts && r.ts <= firstFinish.ts);
       if (rows.length >= 2) {
-        // Check gap between start crossing and first GPS row (crossing may have been
-        // interpolated across a gap, so the pre-gap row was excluded by the filter)
         if (rows[0].ts - firstStart.ts > 60000) hasDataGap = true;
-        // Check gap between last GPS row and finish crossing (same boundary issue)
         if (firstFinish.ts - rows[rows.length - 1].ts > 60000) hasDataGap = true;
         let dist = 0;
         for (let i = 1; i < rows.length; i++) {
@@ -1815,8 +1814,9 @@ const App = (() => {
       ? `Start crossings after ${fmtUTC(raceStartTime)} UTC`
       : 'Start crossings (no start time set — showing all)';
 
-    const hasStart  = results.some(r => r.startCrossings.length  > 0);
-    const hasFinish = results.some(r => r.finishCrossings.length > 0);
+    const afterFirstStart = c => firstStartTs === null || c.ts > firstStartTs;
+    const hasStart  = results.some(r => r.startCrossings.length > 0);
+    const hasFinish = results.some(r => r.finishCrossings.some(afterFirstStart));
 
     let html = `<div class="race-results-section"><h3>${startLabel}</h3>`;
     if (!hasStart) {
@@ -1847,7 +1847,7 @@ const App = (() => {
         <th>Boat</th><th>Time (UTC)</th><th>Elapsed</th>
       </tr></thead><tbody>`;
       for (const { name, color, finishCrossings } of results) {
-        for (const c of finishCrossings) {
+        for (const c of finishCrossings.filter(afterFirstStart)) {
           const elapsed = firstStartTs !== null ? fmtElapsed(c.ts - firstStartTs) : '—';
           html += `<tr>
             <td><span class="race-boat-swatch" style="background:${color}"></span>${name}</td>

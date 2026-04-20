@@ -641,7 +641,7 @@ body {
 .stats-table tr:hover td { background: var(--panel2); }
 .stats-var { color: var(--text); font-weight: 500; min-width: 90px; }
 .stats-unit { color: var(--muted); min-width: 36px; }
-.stats-table td:not(.stats-var):not(.stats-unit) { color: var(--text); }
+.stats-table td:not(.stats-var):not(.stats-unit):not(.stats-warn) { color: var(--text); }
 .stats-se { color: var(--muted); font-size: 11px; }
 
 /* ── Graph tab ───────────────────────────────────────────────────────────────── */
