@@ -77,8 +77,12 @@ const Parser = (() => {
     rows.sort((a, b) => a.ts - b.ts);
 
     // In Expedition CSV, boatId '0' is always the own (primary) boat.
-    // Other IDs are fleet/AIS contacts logged alongside — exclude their GPS positions.
-    const rawGpsRows = rows.filter(r => r.lat !== undefined && r.boatId === '0');
+    // Other IDs are fleet/AIS contacts. If boat 0 is present, discard all other boats
+    // so their GPS positions and any logged fields don't contaminate statistics.
+    const ownRows = rows.filter(r => r.boatId === '0');
+    const dataRows = ownRows.length > 0 ? ownRows : rows;
+
+    const rawGpsRows = dataRows.filter(r => r.lat !== undefined);
 
     // Remove isolated GPS spikes: a point where BOTH the jump from the previous
     // AND the jump to the next exceed a threshold is physically impossible at boat
@@ -99,10 +103,10 @@ const Parser = (() => {
       color,
       fieldMap,   // id → name
       nameToId,   // name → id
-      rows,
+      rows: dataRows,
       gpsRows,
-      minTs: rows.length ? rows[0].ts : 0,
-      maxTs: rows.length ? rows[rows.length - 1].ts : 0,
+      minTs: dataRows.length ? dataRows[0].ts : 0,
+      maxTs: dataRows.length ? dataRows[dataRows.length - 1].ts : 0,
     };
   }
 
