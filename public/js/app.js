@@ -98,7 +98,8 @@ const App = (() => {
 
   // Race
   const IRC_DEFAULTS = { bellino: 1.023, griffin: 1.035, mzungu: 1.031 };
-  const raceIrcRatings = new Map();  // boatName → user-entered IRC rating
+  const raceIrcRatings    = new Map();  // boatName → user-entered IRC rating
+  const raceSelectedFinish = new Map(); // boatName → selected finish crossing ts
 
   let raceStartPreset = 'jog';
   let raceFinishPreset = 'jog';
@@ -1052,10 +1053,15 @@ const App = (() => {
   }
 
   function computeBoatRaceStats(entry, boatResult) {
-    const firstStart  = boatResult.startCrossings[0] ?? null;
-    const firstFinish = firstStart
-      ? (boatResult.finishCrossings.find(c => c.ts > firstStart.ts) ?? null)
-      : null;
+    const firstStart = boatResult.startCrossings[0] ?? null;
+    let firstFinish = null;
+    if (firstStart) {
+      const validFinishes = boatResult.finishCrossings.filter(c => c.ts > firstStart.ts);
+      const selTs = raceSelectedFinish.get(entry.boat.name);
+      firstFinish = (selTs !== undefined ? validFinishes.find(c => c.ts === selTs) : null)
+        ?? validFinishes[0]
+        ?? null;
+    }
 
     const lateAtStart = (firstStart && raceStartTime !== null) ? firstStart.ts - raceStartTime : null;
     const finishTime  = firstFinish ? firstFinish.ts : null;
@@ -1839,18 +1845,26 @@ const App = (() => {
     }
     html += `</div>`;
 
+    const anyMultiFinish = results.some(r => r.finishCrossings.filter(afterFirstStart).length > 1);
+
     html += `<div class="race-results-section"><h3>Finish crossings</h3>`;
     if (!hasFinish) {
       html += `<p class="race-no-data">No crossings detected${!raceFinishLine ? ' — finish line not defined' : ''}.</p>`;
     } else {
-      html += `<table class="race-table"><thead><tr>
-        <th>Boat</th><th>Time (UTC)</th><th>Elapsed</th>
-      </tr></thead><tbody>`;
+      html += `<table class="race-table"><thead><tr>`;
+      if (anyMultiFinish) html += `<th></th>`;
+      html += `<th>Boat</th><th>Time (UTC)</th><th>Elapsed</th></tr></thead><tbody>`;
       for (const { name, color, finishCrossings } of results) {
-        for (const c of finishCrossings.filter(afterFirstStart)) {
+        const valid = finishCrossings.filter(afterFirstStart);
+        const selTs = raceSelectedFinish.has(name) ? raceSelectedFinish.get(name) : (valid[0]?.ts ?? null);
+        for (const c of valid) {
           const elapsed = firstStartTs !== null ? fmtElapsed(c.ts - firstStartTs) : '—';
-          html += `<tr>
-            <td><span class="race-boat-swatch" style="background:${color}"></span>${name}</td>
+          const isSelected = c.ts === selTs;
+          html += `<tr${isSelected ? ' class="race-finish-selected"' : ''}>`;
+          if (anyMultiFinish) {
+            html += `<td><input type="radio" name="finish-${cssId(name)}" value="${c.ts}" data-boat="${name}"${isSelected ? ' checked' : ''}></td>`;
+          }
+          html += `<td><span class="race-boat-swatch" style="background:${color}"></span>${name}</td>
             <td>${fmtUTC(c.ts)}</td>
             <td>${elapsed}</td>
           </tr>`;
@@ -1861,6 +1875,13 @@ const App = (() => {
     html += `</div>`;
 
     el.innerHTML = html;
+
+    el.querySelectorAll('input[type="radio"][data-boat]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        raceSelectedFinish.set(radio.dataset.boat, parseFloat(radio.value));
+        updateRaceDisplay();
+      });
+    });
   }
 
   function updateRaceDisplay() {
