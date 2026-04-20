@@ -11,7 +11,7 @@ const App = (() => {
     Depth: 'm', Baro: 'hPa', Altitude: 'm',
   };
 
-  const DEFAULT_VAR_NAMES = ['BSP', 'TWS', 'TWA', 'Pol0%'];
+  const DEFAULT_VAR_NAMES = ['BSP', 'TWS', 'TWA'];
 
   const PORT_COLOR = '#e53935';
   const STBD_COLOR = '#43a047';
