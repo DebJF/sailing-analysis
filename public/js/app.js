@@ -66,13 +66,25 @@ const App = (() => {
   // name → { boat, fieldTimeseries: Map<fieldId, [{ts,val}]> }
   const boats = new Map();
 
+  // Loaded Expedition .pol polar (see polar.js). Null until the user loads one.
+  let loadedPolar = null;
+  let loadedPolarFilename = '';
+  // Refined polar produced by PolarRefine.recommend() — null when no logs/no
+  // samples. Used by the Download .pol button and by the Polars view.
+  let refinedPolar = null;
+  // Manual point overrides set by drag-edit on the polar plot. Keyed by
+  // `${twsIdx}:${originalTwa}` so re-dragging the same point updates one entry,
+  // and dragging different points on the same TWS each get their own entry.
+  // Survives parameter changes and sample changes; cleared only on polar reload.
+  const polarManualOverrides = new Map();
+
   // Field names visible in the variable panel
   let displayedVars = [...DEFAULT_VAR_NAMES];
 
   // All field names seen across all uploaded boats (name → fieldId in first boat that has it)
   const allFieldNames = new Map();
 
-  // Active view: 'map' | 'beating' | 'twd' | 'gybe' | 'graph'
+  // Active view: 'map' | 'polars' | 'twd' | 'gybe' | 'graph' | 'stats' | 'about' | 'race'
   let currentView = 'map';
 
   // Variables plotted in the Graph tab
@@ -153,12 +165,12 @@ const App = (() => {
     elStatsContent  = document.getElementById('stats-content');
 
     MapManager.init();
-    Analysis.init();
+    PolarView.init({ onPointDrop: handlePointDrop });
     Graph.init({ onClick: handleGraphLabelClick });
 
     // View tabs
     document.getElementById('tab-map').addEventListener('click', () => switchView('map'));
-    document.getElementById('tab-beating').addEventListener('click', () => switchView('beating'));
+    document.getElementById('tab-polars').addEventListener('click', () => switchView('polars'));
     document.getElementById('tab-twd').addEventListener('click', () => switchView('twd'));
     document.getElementById('tab-gybe').addEventListener('click', () => switchView('gybe'));
     document.getElementById('tab-graph').addEventListener('click', () => switchView('graph'));
@@ -189,13 +201,41 @@ const App = (() => {
       e.target.value = '';
     });
 
+    document.getElementById('polar-input').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (file) loadPolarFile(file);
+      e.target.value = '';
+    });
+
+    document.getElementById('polar-show-samples').addEventListener('change', e => {
+      PolarView.setShowSamples(e.target.checked);
+    });
+
+    document.getElementById('polar-show-refined').addEventListener('change', e => {
+      PolarView.setShowRefined(e.target.checked);
+    });
+
+    document.getElementById('polar-export-btn').addEventListener('click', exportRefinedPolar);
+
+    // Filtering-parameters modal
+    const paramsBtn   = document.getElementById('polar-params-btn');
+    const paramsModal = document.getElementById('polar-params-modal');
+    const paramsClose = document.getElementById('btn-polar-params-close');
+    paramsBtn.addEventListener('click', () => paramsModal.classList.remove('hidden'));
+    paramsClose.addEventListener('click', () => paramsModal.classList.add('hidden'));
+    paramsModal.addEventListener('click', (e) => {
+      if (e.target === paramsModal) paramsModal.classList.add('hidden');
+    });
+
+    renderPolarParamsPanel();
+
     const dropZone = document.getElementById('map-container');
     dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
     dropZone.addEventListener('drop', e => {
       e.preventDefault();
       dropZone.classList.remove('drag-over');
-      handleFiles(Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.csv')));
+      handleFiles(Array.from(e.dataTransfer.files).filter(f => /\.(csv|pol)$/i.test(f.name)));
     });
 
     elBtnPlay.addEventListener('click', () => Playback.toggle());
@@ -272,8 +312,35 @@ const App = (() => {
   // ── File handling ─────────────────────────────────────────────────────────────
 
   function handleFiles(files) {
-    fileQueue.push(...files);
-    if (fileQueue.length === files.length) processNextFile();
+    const polFiles = files.filter(f => /\.pol$/i.test(f.name));
+    const csvFiles = files.filter(f => !/\.pol$/i.test(f.name));
+    // Polar files bypass the boat-naming modal
+    for (const f of polFiles) loadPolarFile(f);
+    if (csvFiles.length === 0) return;
+    fileQueue.push(...csvFiles);
+    if (fileQueue.length === csvFiles.length) processNextFile();
+  }
+
+  async function loadPolarFile(file) {
+    const text = await file.text();
+    try {
+      loadedPolar = Polar.parsePol(text);
+    } catch (err) {
+      alert(`Could not parse polar file ${file.name}: ${err.message}`);
+      return;
+    }
+    if (loadedPolar.rows.length === 0) {
+      alert(`No polar rows found in ${file.name}`);
+      return;
+    }
+    loadedPolarFilename = file.name;
+    polarManualOverrides.clear();
+    const fnEl = document.getElementById('polar-filename');
+    if (fnEl) fnEl.textContent = file.name;
+    PolarView.setPolar(loadedPolar);
+    refreshPolarSamples();
+    updatePolarExportButton();
+    if (currentView !== 'polars') switchView('polars');
   }
 
   function processNextFile() {
@@ -323,11 +390,11 @@ const App = (() => {
     if (tackColorMode) {
       MapManager.setTackMode(boat, computeTackSegments(boats.get(boat.name)));
     }
-    if (currentView === 'beating') Analysis.render(collectUpwindData());
     if (currentView === 'twd')  renderTwdTable();
     if (currentView === 'gybe') renderGybeTable();
     if (currentView === 'graph') Graph.render(collectGraphData());
     if (currentView === 'stats') renderStatsTab();
+    if (currentView === 'polars') refreshPolarSamples();
     updateRaceDisplay();
 
     recalcPlaybackRange();
@@ -466,12 +533,367 @@ const App = (() => {
     Playback.setRange(minTs, maxTs);
   }
 
+  // ── Polar refinement (Stage 2) ────────────────────────────────────────────────
+
+  // UI-displayed values (seconds for time params, raw for the rest); converted
+  // to PolarRefine's ms-based units in polarRefineParams() below.
+  const POLAR_PARAM_DEFS = [
+    { key: 'window',          label: 'Avg window (s)',       min: 10,  max: 300, step: 5 },
+    { key: 'stride',          label: 'Stride (s)',           min: 1,   max: 60,  step: 1 },
+    { key: 'manoeuvreBefore', label: 'Excl before tack (s)', min: 0,   max: 60,  step: 5 },
+    { key: 'manoeuvreAfter',  label: 'Excl after tack (s)',  min: 0,   max: 120, step: 5 },
+    { key: 'deltaTws',        label: 'Max ΔTWS (kn)',        min: 0.5, max: 10,  step: 0.5 },
+    { key: 'deltaTwd',        label: 'Max ΔTWD (°)',         min: 1,   max: 60,  step: 1 },
+    { key: 'hdgSwing',        label: 'Max HDG swing (°)',    min: 1,   max: 180, step: 1 },
+    { key: 'minBsp',          label: 'Min BSP (kn)',         min: 0,   max: 10,  step: 0.5 },
+    { key: 'percentile',      label: 'Adjust percentile',    min: 50,  max: 95,  step: 5 },
+    { key: 'minSamples',      label: 'Min samples / cell',   min: 1,   max: 200, step: 1 },
+    { key: 'minSpanSec',      label: 'Min span / cell (s)',  min: 0,   max: 3600, step: 60 },
+    { key: 'minShiftDeg',     label: 'Min optimum shift (°)', min: 0,  max: 15,  step: 1 },
+  ];
+
+  const polarParams = {
+    window: 60, stride: 10, manoeuvreBefore: 10, manoeuvreAfter: 50,
+    deltaTws: 4, deltaTwd: 15, hdgSwing: 30, minBsp: 2,
+    percentile: 75, minSamples: 10, minSpanSec: 600,
+    minShiftDeg: 1,
+  };
+
+  // boatName → { enabled, qualityStart (ms), qualityEnd (ms), sampleCount, strideCount, rejected }
+  const polarLogState = new Map();
+
+  function polarRefineParams() {
+    return {
+      window:          polarParams.window * 1000,
+      stride:          polarParams.stride * 1000,
+      manoeuvreBefore: polarParams.manoeuvreBefore * 1000,
+      manoeuvreAfter:  polarParams.manoeuvreAfter * 1000,
+      deltaTws:        polarParams.deltaTws,
+      deltaTwd:        polarParams.deltaTwd,
+      hdgSwing:        polarParams.hdgSwing,
+      minBsp:          polarParams.minBsp,
+    };
+  }
+
+  function polarRecommendParams() {
+    return {
+      percentile:   polarParams.percentile,
+      minSamples:   polarParams.minSamples,
+      minSpanSec:   polarParams.minSpanSec,
+      minShiftDeg:  polarParams.minShiftDeg,
+    };
+  }
+
+  function ensurePolarLogState(name, entry) {
+    if (polarLogState.has(name)) return;
+    polarLogState.set(name, {
+      enabled:      true,
+      qualityStart: entry.boat.minTs,
+      qualityEnd:   entry.boat.maxTs,
+      sampleCount:  0,
+      strideCount:  0,
+      rejected:     null,
+    });
+  }
+
+  function buildPolarLogData(entry, qualityStart, qualityEnd) {
+    const tws = getFieldSeries(entry, 'TWS');
+    const twa = getFieldSeries(entry, 'TWA');
+    const bsp = getFieldSeries(entry, 'BSP');
+    if (!tws || !twa || !bsp) return null;
+    return {
+      tws, twa, bsp,
+      twd: getFieldSeries(entry, 'TWD'),
+      hdg: getFieldSeries(entry, 'HDG') || getFieldSeries(entry, 'COG'),
+      // Detect manoeuvres across the whole log; the mask widening happens in PolarRefine.
+      tackTs: detectTacks(entry, entry.boat.minTs, entry.boat.maxTs).map(t => t.ts),
+      gybeTs: detectGybes(entry, entry.boat.minTs, entry.boat.maxTs).map(g => g.ts),
+      qualityStart, qualityEnd,
+    };
+  }
+
+  function refreshPolarSamples() {
+    const params = polarRefineParams();
+    const allSamples = [];
+    for (const [name, entry] of boats) {
+      ensurePolarLogState(name, entry);
+      const st = polarLogState.get(name);
+      if (!st.enabled) {
+        st.sampleCount = 0; st.strideCount = 0; st.rejected = null;
+        continue;
+      }
+      const data = buildPolarLogData(entry, st.qualityStart, st.qualityEnd);
+      if (!data) {
+        st.sampleCount = 0; st.strideCount = 0; st.rejected = null;
+        continue;
+      }
+      const result = PolarRefine.generateSamples(data, params);
+      st.sampleCount = result.samples.length;
+      st.strideCount = result.strideCount;
+      st.rejected    = result.rejected;
+      for (const s of result.samples) { s.boat = name; allSamples.push(s); }
+    }
+    PolarView.setSamples(allSamples);
+
+    // Stages 3 + 4 + manual: per-cell refinement, observed optimum-angle
+    // integration, then user drag-edit overrides on top.
+    let refinedCount = 0;
+    let excludedNoGo = 0;
+    refinedPolar = null;
+
+    if (loadedPolar) {
+      const params  = polarRecommendParams();
+      let refined;
+      if (allSamples.length) {
+        refined = PolarRefine.recommend(allSamples, loadedPolar, params);
+      } else if (polarManualOverrides.size > 0) {
+        // No samples but user has drag-edits — clone the polar so we have a
+        // refined surface to apply overrides to.
+        refined = clonePolarForRefining(loadedPolar);
+      }
+      if (refined) {
+        refined = applyManualOverrides(refined);
+        for (const r of refined.rows) for (const p of r.points) if (p.recommended) refinedCount++;
+        excludedNoGo = refined.excludedNoGo || 0;
+        PolarView.setRefined(refined);
+        PolarView.setOptima(refined.optima || [], params.minShiftDeg);
+        refinedPolar = refined;
+      } else {
+        PolarView.setRefined(null);
+        PolarView.setOptima([], params.minShiftDeg);
+      }
+    } else {
+      PolarView.setRefined(null);
+      PolarView.setOptima([], polarParams.minShiftDeg);
+    }
+
+    renderPolarLogsPanel();
+    updatePolarStatus(allSamples.length, refinedCount, excludedNoGo);
+    updatePolarExportButton();
+  }
+
+  // Shallow clone of a polar with new row/point objects so we can mutate
+  // safely (used when the user drag-edits without having loaded any logs).
+  function clonePolarForRefining(p) {
+    return {
+      header:  [...p.header],
+      twsGrid: [...p.twsGrid],
+      allTwas: [...p.allTwas],
+      rows: p.rows.map(r => {
+        const points = r.points.map(pp => ({ ...pp, originalTwa: pp.twa, bspOld: pp.bsp }));
+        return {
+          tws:      r.tws,
+          points,
+          upwind:   r.upwind   ? points.find(pp => Math.abs(pp.twa - r.upwind.twa)   < 0.01) : null,
+          downwind: r.downwind ? points.find(pp => Math.abs(pp.twa - r.downwind.twa) < 0.01) : null,
+        };
+      }),
+      optima:       [],
+      excludedNoGo: 0,
+    };
+  }
+
+  function updatePolarExportButton() {
+    const btn = document.getElementById('polar-export-btn');
+    if (!btn) return;
+    btn.disabled = !loadedPolar;
+  }
+
+  // Build a download filename from the loaded polar's filename:
+  //   "Bellino new beating angles.txt" → "Bellino new beating angles - refined.pol"
+  function deriveExportFilename(originalName) {
+    if (!originalName) return 'polar - refined.pol';
+    const base = originalName.replace(/\.[^.]+$/, '');
+    return `${base} - refined.pol`;
+  }
+
+  // Apply user drag-edit overrides on top of the refined polar. Each override
+  // identifies the target point by its originalTwa (the TWA in the user's
+  // original polar). After all overrides are applied we re-link upwind /
+  // downwind references because the underlying point objects were replaced.
+  function applyManualOverrides(refined) {
+    if (!refined || polarManualOverrides.size === 0) return refined;
+
+    for (const [key, override] of polarManualOverrides) {
+      const colon  = key.indexOf(':');
+      const twsIdx = parseInt(key.slice(0, colon), 10);
+      const origTwa = parseFloat(key.slice(colon + 1));
+
+      const row = refined.rows[twsIdx];
+      if (!row) continue;
+
+      const ptIdx = row.points.findIndex(pp =>
+        pp.originalTwa != null
+          ? Math.abs(pp.originalTwa - origTwa) < 0.01
+          : Math.abs(pp.twa - origTwa) < 0.01
+      );
+      if (ptIdx < 0) continue;
+
+      const oldPt = row.points[ptIdx];
+      const bspBaseline = oldPt.bspOld != null ? oldPt.bspOld : oldPt.bsp;
+      const twaBaseline = oldPt.originalTwa != null ? oldPt.originalTwa : oldPt.twa;
+
+      row.points[ptIdx] = {
+        twa:            override.twa,
+        bsp:            override.bsp,
+        bspOld:         bspBaseline,
+        twaOld:         twaBaseline,
+        originalTwa:    twaBaseline,
+        sampleCount:    0,
+        manualOverride: true,
+        shifted:        Math.abs(override.twa - twaBaseline) >= 0.5,
+        recommended:    true,
+        deltaPct:       bspBaseline > 0
+          ? ((override.bsp - bspBaseline) / bspBaseline) * 100
+          : 0,
+      };
+    }
+
+    // Re-link upwind / downwind references and re-sort the points list.
+    for (const r of refined.rows) {
+      r.points.sort((a, b) => a.twa - b.twa);
+      const findByOriginal = (origTwa) =>
+        r.points.find(p => (p.originalTwa != null ? p.originalTwa : p.twa) === origTwa);
+      if (r.upwind) {
+        const origTwa = r.upwind.originalTwa != null ? r.upwind.originalTwa : r.upwind.twa;
+        const newRef  = findByOriginal(origTwa);
+        if (newRef) r.upwind = newRef;
+      }
+      if (r.downwind) {
+        const origTwa = r.downwind.originalTwa != null ? r.downwind.originalTwa : r.downwind.twa;
+        const newRef  = findByOriginal(origTwa);
+        if (newRef) r.downwind = newRef;
+      }
+    }
+
+    const twaSet = new Set();
+    for (const r of refined.rows) for (const p of r.points) twaSet.add(p.twa);
+    refined.allTwas = [...twaSet].sort((a, b) => a - b);
+
+    return refined;
+  }
+
+  function handlePointDrop(twsIdx, originalTwa, twa, bsp) {
+    if (!loadedPolar) return;
+    const key = `${twsIdx}:${originalTwa.toFixed(2)}`;
+    polarManualOverrides.set(key, { twa, bsp });
+    refreshPolarSamples();
+  }
+
+  function exportRefinedPolar() {
+    if (!loadedPolar) return;
+    // Fall back to the raw polar if no refinement has run (no logs uploaded).
+    const polarToExport = refinedPolar || loadedPolar;
+    const text = Polar.serialisePol(polarToExport);
+    const filename = deriveExportFilename(loadedPolarFilename);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+  }
+
+  function updatePolarStatus(sampleCount, refinedCount, excludedNoGo) {
+    const el = document.getElementById('polar-status');
+    if (!el) return;
+    if (!loadedPolar) { el.textContent = ''; return; }
+    let txt = `${loadedPolar.rows.length} TWS rows · ${sampleCount} samples`;
+    if (sampleCount > 0) {
+      txt += ` · ${refinedCount || 0} cells refined`;
+      if (excludedNoGo) txt += ` · ${excludedNoGo} below upwind cutoff`;
+    }
+    el.textContent = txt;
+  }
+
+  function renderPolarParamsPanel() {
+    const grid = document.getElementById('polars-params-grid');
+    if (!grid) return;
+    let html = '<div class="polars-params">';
+    for (const def of POLAR_PARAM_DEFS) {
+      html += `<label>${def.label}<input type="number" data-key="${def.key}" ` +
+        `min="${def.min}" max="${def.max}" step="${def.step}" value="${polarParams[def.key]}"></label>`;
+    }
+    html += '</div>';
+    grid.innerHTML = html;
+    grid.querySelectorAll('input[type="number"]').forEach(input => {
+      input.addEventListener('change', () => {
+        const v = parseFloat(input.value);
+        if (!isNaN(v)) {
+          polarParams[input.dataset.key] = v;
+          refreshPolarSamples();
+        }
+      });
+    });
+  }
+
+  function renderPolarLogsPanel() {
+    const el = document.getElementById('polars-logs-list');
+    if (!el) return;
+    if (boats.size === 0) {
+      el.innerHTML = '<div class="polars-empty-logs">Upload an Expedition CSV log to enable polar refinement.</div>';
+      return;
+    }
+
+    let html = '<table class="polars-logs-table"><thead><tr>' +
+      '<th></th><th>Boat</th><th>Quality start</th><th>Quality end</th><th></th><th>Samples</th>' +
+      '</tr></thead><tbody>';
+    for (const [name, entry] of boats) {
+      ensurePolarLogState(name, entry);
+      const st = polarLogState.get(name);
+      const safeName = name.replace(/"/g, '&quot;');
+      const samplesText = st.strideCount > 0
+        ? `${st.sampleCount} / ${st.strideCount}`
+        : (st.enabled ? '—' : 'off');
+      html += `<tr data-boat="${safeName}">` +
+        `<td><input type="checkbox" class="pl-enabled" ${st.enabled ? 'checked' : ''}></td>` +
+        `<td><span class="boat-dot" style="background:${entry.boat.color}"></span>${name}</td>` +
+        `<td><input type="text" class="pl-start" value="${fmtUTC(st.qualityStart)}"></td>` +
+        `<td><input type="text" class="pl-end"   value="${fmtUTC(st.qualityEnd)}"></td>` +
+        `<td><button class="pl-from-trim" title="Copy current Map-tab trim into this log's quality window">From trim</button></td>` +
+        `<td class="pl-samples">${samplesText}</td>` +
+        `</tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+
+    el.querySelectorAll('tr[data-boat]').forEach(tr => {
+      const name = tr.dataset.boat;
+      const st = polarLogState.get(name);
+      tr.querySelector('.pl-enabled').addEventListener('change', e => {
+        st.enabled = e.target.checked;
+        refreshPolarSamples();
+      });
+      tr.querySelector('.pl-start').addEventListener('change', e => {
+        const ts = parseUTCTime(e.target.value, st.qualityStart);
+        if (ts !== null) { st.qualityStart = ts; e.target.classList.remove('invalid'); }
+        else e.target.classList.add('invalid');
+        refreshPolarSamples();
+      });
+      tr.querySelector('.pl-end').addEventListener('change', e => {
+        const ts = parseUTCTime(e.target.value, st.qualityEnd);
+        if (ts !== null) { st.qualityEnd = ts; e.target.classList.remove('invalid'); }
+        else e.target.classList.add('invalid');
+        refreshPolarSamples();
+      });
+      tr.querySelector('.pl-from-trim').addEventListener('click', () => {
+        const { trimStart, trimEnd } = Playback.getState();
+        st.qualityStart = trimStart;
+        st.qualityEnd   = trimEnd;
+        refreshPolarSamples();
+      });
+    });
+  }
+
   // ── View switching ────────────────────────────────────────────────────────────
 
   function switchView(view) {
     currentView = view;
     document.getElementById('tab-map').classList.toggle('active', view === 'map');
-    document.getElementById('tab-beating').classList.toggle('active', view === 'beating');
+    document.getElementById('tab-polars').classList.toggle('active', view === 'polars');
     document.getElementById('tab-twd').classList.toggle('active', view === 'twd');
     document.getElementById('tab-gybe').classList.toggle('active', view === 'gybe');
     document.getElementById('tab-graph').classList.toggle('active', view === 'graph');
@@ -479,7 +901,7 @@ const App = (() => {
     document.getElementById('tab-about').classList.toggle('active', view === 'about');
     document.getElementById('tab-race').classList.toggle('active', view === 'race');
     document.getElementById('map-container').classList.toggle('view-hidden', view !== 'map');
-    document.getElementById('analysis-container').classList.toggle('view-hidden', view !== 'beating');
+    document.getElementById('polars-container').classList.toggle('view-hidden', view !== 'polars');
     document.getElementById('twd-container').classList.toggle('view-hidden', view !== 'twd');
     document.getElementById('gybe-container').classList.toggle('view-hidden', view !== 'gybe');
     document.getElementById('graph-container').classList.toggle('view-hidden', view !== 'graph');
@@ -487,7 +909,7 @@ const App = (() => {
     document.getElementById('about-container').classList.toggle('view-hidden', view !== 'about');
     document.getElementById('race-container').classList.toggle('view-hidden', view !== 'race');
     document.getElementById('sidebar').classList.toggle('view-hidden', view !== 'map');
-    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats' || view === 'about' || view === 'race');
+    document.getElementById('controls').classList.toggle('view-hidden', view === 'graph' || view === 'stats' || view === 'about' || view === 'race' || view === 'polars');
     elBtnRuler.classList.toggle('view-hidden', view !== 'map');
     if (view !== 'map' && rulerMode) {
       rulerMode = false;
@@ -495,35 +917,21 @@ const App = (() => {
       MapManager.deactivateRuler();
     }
     if (view !== 'map') MapManager.deactivateLinePlacer();
-    if (view === 'map')     MapManager.invalidateSize();
-    if (view === 'beating') Analysis.render(collectUpwindData());
-    if (view === 'twd')  renderTwdTable();
-    if (view === 'gybe') renderGybeTable();
-    if (view === 'graph') Graph.render(collectGraphData());
-    if (view === 'stats') renderStatsTab();
+    if (view === 'map')    MapManager.invalidateSize();
+    if (view === 'polars') {
+      PolarView.setPolar(loadedPolar);
+      refreshPolarSamples();
+    }
+    if (view === 'twd')    renderTwdTable();
+    if (view === 'gybe')   renderGybeTable();
+    if (view === 'graph')  Graph.render(collectGraphData());
+    if (view === 'stats')  renderStatsTab();
     if (view === 'race') {
       renderRaceSetup();
       MapManager.setRaceLine('start',  raceStartLine);
       MapManager.setRaceLine('finish', raceFinishLine);
       updateRaceDisplay();
     }
-  }
-
-  function collectUpwindData() {
-    const { trimStart, trimEnd } = Playback.getState();
-    const points = [];
-    for (const [, entry] of boats) {
-      const twaSeries = getFieldSeries(entry, 'TWA');
-      if (!twaSeries) continue;
-      for (const { ts, val: twa } of twaSeries) {
-        if (ts < trimStart || ts > trimEnd) continue;
-        if (Math.abs(twa) >= 55) continue;
-        const bsp = getFieldValue(entry, 'BSP', ts);
-        if (bsp === null || bsp < 0) continue;
-        points.push({ twa, bsp, color: twa < 0 ? PORT_COLOR : STBD_COLOR });
-      }
-    }
-    return points;
   }
 
   // ── TWD tack analysis ─────────────────────────────────────────────────────────
@@ -578,11 +986,13 @@ const App = (() => {
   const TACK_INT_FROM  = -10000, TACK_INT_TO  =  50000;
   const TACK_INT_S = (TACK_INT_TO - TACK_INT_FROM) / 1000; // integration window in seconds
 
-  function detectTacks(entry) {
+  function detectTacks(entry, rangeStart, rangeEnd) {
     const series = getFieldSeries(entry, 'TWA');
     if (!series || series.length < 2) return [];
 
-    const { trimStart, trimEnd } = Playback.getState();
+    const pb = Playback.getState();
+    const trimStart = rangeStart !== undefined ? rangeStart : pb.trimStart;
+    const trimEnd   = rangeEnd   !== undefined ? rangeEnd   : pb.trimEnd;
     const MIN_INTERVAL = 30000; // ms — ignore secondary sign-changes within 30 s
     const tacks = [];
     let lastTackTs = -Infinity;
@@ -882,11 +1292,13 @@ const App = (() => {
 
   // ── Gybe analysis ────────────────────────────────────────────────────────────
 
-  function detectGybes(entry) {
+  function detectGybes(entry, rangeStart, rangeEnd) {
     const series = getFieldSeries(entry, 'TWA');
     if (!series || series.length < 2) return [];
 
-    const { trimStart, trimEnd } = Playback.getState();
+    const pb = Playback.getState();
+    const trimStart = rangeStart !== undefined ? rangeStart : pb.trimStart;
+    const trimEnd   = rangeEnd   !== undefined ? rangeEnd   : pb.trimEnd;
     const MIN_INTERVAL = 30000;
     const gybes = [];
     let lastGybeTs = -Infinity;
@@ -1235,12 +1647,29 @@ const App = (() => {
       .map(n => String(n).padStart(2, '0')).join(':');
   }
 
+  function fmtUTCDateTime(ms) {
+    const d = new Date(ms);
+    const date = [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]
+      .map((n, i) => String(n).padStart(i === 0 ? 4 : 2, '0')).join('-');
+    return date + ' ' + fmtUTC(ms);
+  }
+
+  // Accepts either a time-only string ("HH:MM" / "HH:MM:SS", anchored to
+  // refMs's date) or a full date+time string ("YYYY-MM-DD HH:MM[:SS]" or
+  // "YYYY-MM-DDTHH:MM[:SS]"). Returns null on parse failure.
   function parseUTCTime(str, refMs) {
-    const m = str.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-    if (!m) return null;
-    const d = new Date(refMs);
-    d.setUTCHours(+m[1], +m[2], m[3] !== undefined ? +m[3] : 0, 0);
-    return d.getTime();
+    str = str.trim();
+    const dt = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (dt) {
+      return Date.UTC(+dt[1], +dt[2] - 1, +dt[3], +dt[4], +dt[5], dt[6] !== undefined ? +dt[6] : 0);
+    }
+    const t = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (t) {
+      const d = new Date(refMs);
+      d.setUTCHours(+t[1], +t[2], t[3] !== undefined ? +t[3] : 0, 0);
+      return d.getTime();
+    }
+    return null;
   }
 
   function handleGraphLabelClick(varName, clientX, clientY) {
@@ -1279,16 +1708,19 @@ const App = (() => {
       dismiss();
       if (isXAxis) {
         const { trimStart, trimEnd } = Playback.getState();
-        const defStart = current.mode === 'manual' ? fmtUTC(current.start) : fmtUTC(trimStart);
-        const defEnd   = current.mode === 'manual' ? fmtUTC(current.end)   : fmtUTC(trimEnd);
-        const startStr = window.prompt('Start time (HH:MM or HH:MM:SS UTC):', defStart);
+        // Default to full datetime so the user can edit either part. Time-only
+        // input (HH:MM[:SS]) still works for single-day windows.
+        const defStart = current.mode === 'manual' ? fmtUTCDateTime(current.start) : fmtUTCDateTime(trimStart);
+        const defEnd   = current.mode === 'manual' ? fmtUTCDateTime(current.end)   : fmtUTCDateTime(trimEnd);
+        const promptText = 'UTC — accepts HH:MM[:SS] or YYYY-MM-DD HH:MM[:SS]';
+        const startStr = window.prompt('Start time\n' + promptText, defStart);
         if (startStr === null) return;
-        const endStr = window.prompt('End time (HH:MM or HH:MM:SS UTC):', defEnd);
+        const endStr = window.prompt('End time\n' + promptText, defEnd);
         if (endStr === null) return;
         const start = parseUTCTime(startStr, trimStart);
         const end   = parseUTCTime(endStr,   trimStart);
         if (start === null || end === null || start >= end) {
-          alert('Invalid times — enter HH:MM or HH:MM:SS where start < end.');
+          alert('Invalid times — enter HH:MM[:SS] or YYYY-MM-DD HH:MM[:SS] where start < end.');
           return;
         }
         graphXScale = { mode: 'manual', start, end };
@@ -1487,7 +1919,6 @@ const App = (() => {
       else MapManager.setTrim(entry.boat, start, end);
     }
     updateScrubberRange();
-    if (currentView === 'beating') Analysis.render(collectUpwindData());
     if (currentView === 'twd')  renderTwdTable();
     if (currentView === 'gybe') renderGybeTable();
     if (currentView === 'graph') Graph.render(collectGraphData());
@@ -1524,16 +1955,17 @@ const App = (() => {
         const name = btn.dataset.name;
         MapManager.removeBoat(name);
         boats.delete(name);
+        polarLogState.delete(name);
         rebuildAllFieldNames();
         recalcPlaybackRange();
         for (const [, e] of boats) MapManager.clearTrim(e.boat);
         const st = Playback.getState();
         onTick(st.currentTs);
-        if (currentView === 'beating') Analysis.render(collectUpwindData());
         if (currentView === 'twd')  renderTwdTable();
         if (currentView === 'gybe') renderGybeTable();
         if (currentView === 'graph') Graph.render(collectGraphData());
         if (currentView === 'stats') renderStatsTab();
+        if (currentView === 'polars') refreshPolarSamples();
         updateRaceDisplay();
         renderBoatList();
         renderVariablePanel();

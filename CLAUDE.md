@@ -26,10 +26,13 @@ No build step, no bundler, no tests. The server is a one-liner Express static fi
 Pure vanilla JS, no frameworks, no modules. All JS files are loaded via `<script>` tags in `index.html` and expose globals. Script load order matters:
 
 1. `parser.js` → `Parser`
-2. `map.js` → `MapManager`
-3. `playback.js` → `Playback`
-4. `analysis.js` → `Analysis`
-5. `app.js` → `App` (wires everything together, calls `App.init()` on DOMContentLoaded)
+2. `polar.js` → `Polar` (.pol parsing, bilinear interpolation, serialise)
+3. `polar_refine.js` → `PolarRefine` (windowed sample generation + quality filters)
+4. `polar_view.js` → `PolarView` (polar tab table + polar plot canvas + sample overlay)
+5. `map.js` → `MapManager`
+6. `playback.js` → `Playback`
+7. `graph.js` → `Graph`
+8. `app.js` → `App` (wires everything together, calls `App.init()` on DOMContentLoaded)
 
 Each module is an IIFE returning a public API object.
 
@@ -60,12 +63,13 @@ Each module is an IIFE returning a public API object.
 **App state:**
 - `boats: Map<name, {boat, fieldTimeseries}>` — loaded boats
 - Playback trim is in `Playback` state (`trimStart`/`trimEnd` as ms timestamps)
-- `currentView`: `'map' | 'beating' | 'twd' | 'gybe'`
+- `currentView`: `'map' | 'polars' | 'twd' | 'gybe' | 'graph' | 'stats' | 'about' | 'race'`
+- `loadedPolar`: parsed Expedition `.pol` file (see polar.js), null until user loads one
 
 ### Views
 
 - **Map** (`map-container`): Leaflet map with CartoDB light + OpenSeaMap seamark overlay. Each boat gets a polyline + oriented boat icon. Trim dims the full track and adds a bright trim polyline. Tack mode replaces the polyline with coloured segments (port=red, stbd=green). Wind barbs are Leaflet DivIcons with inline SVG, rotated by TWD, scaled by zoom level.
-- **Upwind Polars** (`analysis-container`): Canvas scatter plot of BSP vs TWA (folded, 0–55°) for all upwind data in trim window.
+- **Polars** (`polars-container`): Table + polar-plot view of a loaded Expedition `.pol` file. Upwind/downwind VMG-optimal angles per TWS row are detected (any TWA between 30–170° that is not a multiple of 10°) and highlighted. Stage 2 adds a per-log quality-window selector and a parameters panel (averaging window, stride, manoeuvre exclusion, ΔTWS / ΔTWD / HDG-swing thresholds, min BSP); `PolarRefine.generateSamples()` runs live, and 60 s averaged samples are overlaid on the polar plot, coloured by their nearest TWS curve. See `Specification/Polars-plan.md` for the staged plan.
 - **Tacking** (`twd-container`): VMG chart + table of tack events. Each row shows port/stbd TWD, shift, and ground lost. Summary row shows total tacks, TWA correction (avg shift ÷ 2), avg ground lost, avg TWS. Rows with unstable wind (range >10° in ±30–60s windows) are highlighted red.
 - **Gybing** (`gybe-container`): Same structure as Tacking but for downwind manoeuvres. VMG is negated so the chart shows positive downwind progress.
 

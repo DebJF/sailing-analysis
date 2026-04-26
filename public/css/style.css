@@ -386,17 +386,244 @@ body {
 /* Hide non-active view */
 .view-hidden { display: none !important; }
 
-/* Analysis (scatter plot) container */
-#analysis-container {
+/* Polars view */
+#polars-container {
   flex: 1;
-  position: relative;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--bg);
 }
-#scatter-canvas {
-  display: block;
+#polars-top-bar {
+  flex-shrink: 0;
+  height: 40px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 12px;
+  background: var(--panel);
+}
+.upload-btn-small {
+  display: inline-flex;
+  align-items: center;
+  background: var(--accent);
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.upload-btn-small:hover { background: #1565c0; }
+.upload-btn-small input { display: none; }
+.polar-filename {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+.polar-status {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+}
+.polars-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.polars-toggle input { cursor: pointer; }
+
+button.polar-export-btn,
+button.polar-params-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+button.polar-params-btn { background: var(--panel2); color: var(--text); }
+button.polar-export-btn:hover:not(:disabled),
+button.polar-params-btn:hover { background: #1565c0; color: #fff; }
+button.polar-export-btn:disabled {
+  background: var(--panel2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+#polars-controls {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel2);
+  max-height: 160px;
+  overflow: auto;
+}
+#polars-logs-panel { min-width: 0; }
+
+.polars-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.polars-logs-table {
+  border-collapse: collapse;
   width: 100%;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.polars-logs-table th,
+.polars-logs-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.polars-logs-table th {
+  font-weight: 600;
+  color: var(--muted);
+}
+.polars-logs-table input[type="text"] {
+  width: 76px;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 11px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.polars-logs-table input[type="text"].invalid {
+  border-color: var(--danger);
+}
+.polars-logs-table .pl-samples {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.polars-logs-table button {
+  font-size: 10px;
+  padding: 2px 6px;
+}
+.polars-empty-logs {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.polars-params {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 18px;
+}
+.polars-params label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.polars-params input[type="number"] {
+  width: 76px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+#polars-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+#polars-table {
+  width: 50%;
+  min-width: 240px;
+  overflow: auto;
+  padding: 10px;
+  border-right: 1px solid var(--border);
+}
+#polars-canvas {
+  flex: 1;
+  display: block;
+  min-width: 0;
   height: 100%;
+}
+.polars-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 20px;
+  text-align: center;
+}
+.polars-data-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.polars-data-table th,
+.polars-data-table td {
+  padding: 3px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.polars-data-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 600;
+  z-index: 1;
+}
+.polars-data-table td.twa-cell {
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+}
+.polars-data-table td.up-opt { background: rgba(66, 165, 245, 0.18); font-weight: 600; }
+.polars-data-table td.dn-opt { background: rgba(251, 140, 0, 0.18); font-weight: 600; }
+.polars-data-table th.tws-faded,
+.polars-data-table td.tws-faded { color: rgba(224, 238, 247, 0.25); }
+.polars-data-table th.tws-focus,
+.polars-data-table td.tws-focus { background: rgba(255, 255, 255, 0.04); font-weight: 700; }
+.polars-data-table th.tws-clickable { cursor: pointer; }
+.polars-data-table th.tws-clickable:hover { background: rgba(255, 255, 255, 0.08); }
+.polars-data-table td.refined { font-weight: 600; cursor: help; }
+.polars-data-table td.refined-insufficient { color: rgba(224, 238, 247, 0.55); cursor: help; }
+.polars-data-table td.refined-removed { color: rgba(224, 238, 247, 0.30); text-decoration: line-through; cursor: help; }
+.polars-data-table td.manual-edit { box-shadow: inset 0 0 0 1px rgba(255, 193, 7, 0.7); }
+
+.polars-optima-title {
+  margin-top: 18px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.polars-optima-table th { text-align: center; }
+.polars-optima-table td { text-align: center; font-variant-numeric: tabular-nums; }
+.polars-optima-table td.optimum-shift {
+  background: rgba(255, 193, 7, 0.22);
+  font-weight: 600;
+}
+.polars-optima-table td.manual-edit-cell {
+  background: rgba(255, 193, 7, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 193, 7, 0.7);
+  font-weight: 600;
 }
 
 /* TWD analysis view */
@@ -730,6 +957,7 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+.modal-box-wide { width: 520px; }
 
 .modal-box h3 {
   font-size: 15px;

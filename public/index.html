@@ -17,14 +17,14 @@
       <button id="tab-graph"   class="tab-btn">Graph</button>
       <button id="tab-race"    class="tab-btn">Race</button>
       <button id="tab-stats"   class="tab-btn">Statistics</button>
+      <button id="tab-polars"  class="tab-btn">Polars</button>
       <button id="tab-twd"     class="tab-btn">Tacking</button>
       <button id="tab-gybe"    class="tab-btn">Gybing</button>
-      <button id="tab-beating" class="tab-btn">Upwind Polars</button>
       <button id="tab-about"   class="tab-btn">About</button>
     </nav>
-    <label class="upload-btn" title="Upload Expedition CSV log files">
+    <label class="upload-btn" title="Upload Expedition CSV log files or .pol polar files">
       + Upload Files
-      <input type="file" id="file-input" multiple accept=".csv">
+      <input type="file" id="file-input" multiple accept=".csv,.pol">
     </label>
   </header>
 
@@ -44,9 +44,36 @@
       </div>
     </div>
 
-    <!-- Analysis (Beating) -->
-    <div id="analysis-container" class="view-hidden">
-      <canvas id="scatter-canvas"></canvas>
+    <!-- Polars -->
+    <div id="polars-container" class="view-hidden">
+      <div id="polars-top-bar">
+        <label class="upload-btn-small" title="Load an Expedition .pol polar file">
+          Load polar (.pol)
+          <input type="file" id="polar-input" accept=".pol,.txt">
+        </label>
+        <span id="polar-filename" class="polar-filename"></span>
+        <span id="polar-status" class="polar-status"></span>
+        <label class="polars-toggle">
+          <input type="checkbox" id="polar-show-samples" checked>
+          Overlay log samples
+        </label>
+        <label class="polars-toggle">
+          <input type="checkbox" id="polar-show-refined" checked>
+          Show refined polar
+        </label>
+        <button id="polar-params-btn" class="upload-btn-small polar-params-btn" title="Edit the quality-filter parameters">Filtering parameters</button>
+        <button id="polar-export-btn" class="upload-btn-small polar-export-btn" disabled title="Save the (refined) polar as a .pol file">Save polars</button>
+      </div>
+      <div id="polars-controls">
+        <div id="polars-logs-panel">
+          <div class="polars-section-title">Log files for refinement</div>
+          <div id="polars-logs-list"></div>
+        </div>
+      </div>
+      <div id="polars-body">
+        <div id="polars-table"></div>
+        <canvas id="polars-canvas"></canvas>
+      </div>
     </div>
 
     <!-- Analysis (TWD) -->
@@ -66,30 +93,31 @@
       <div id="about-content">
         <h2>Sailing Analysis</h2>
         <p>This viewer has been written by Deb Fish using Claude Code and deployed through Vercel to <a href="https://sailing-analysis.vercel.app/" target="_blank">sailing-analysis.vercel.app</a>.</p>
-        <p>Users can upload one or more log files from Expedition navigation software and view them (no other formats supported yet).</p>
+        <p>Users can upload one or more log files from Expedition navigation software, plus an Expedition .pol polar file for the same yacht. Other log formats are not supported yet. The player can be used with a single boat but is particularly insightful when used with log files from multiple similar boats, as that allows both performance and calibrations to be compared.</p>
 
         <h3>Tabs</h3>
         <dl>
           <dt>Map</dt>
-          <dd>Displays the yacht(s) tracks on a nautical chart. Allows the user to scroll in and out, set the start and end of the race or period of interest, display wind barbs (measured), display selected variables at the selected point on the track, colour the track according to the vessel's tack, and use the ruler to measure distances.</dd>
+          <dd>Displays the yacht(s) tracks on a nautical chart. Allows the user to scroll in and out, set the start and end of the race or period of interest, display wind barbs (measured), display selected variables at the selected point on the track, colour the track according to the vessel's tack, use the ruler to measure distances.</dd>
 
-          <dt>Upwind Polars</dt>
-          <dd>A scatter plot of TWA against boat speed. I am not finding this useful yet.</dd>
+          <dt>Graph</dt>
+          <dd>Allows the user to select variables and plot them against time. For AWA and TWA only the +- button toggles between showing the actual AWA / TWA and the magnitude, so converting negative values to positive and colour coding which tack the boat is on. This latter feature only really works with a single boat as for multiple boats the lines are all coloured red and green when the boat is on port and starboard tack respectively.</dd>
+
+          <dt>Race</dt>
+          <dd>Set start and finish lines (presets for JOG and RORC West/East-going courses, or any custom lat/lons), enter each boat's IRC TCC rating, and the tab marks each boat's start and finish crossings on the map and computes elapsed and corrected times. The Statistics tab uses the same lines for race-specific stats.</dd>
+
+          <dt>Statistics</dt>
+          <dd>Shows averages and standard deviations of key variables (TWS, TWD, AWS, |AWA|, |TWA|, BSP, VMG, target BSP/TWA, polar percentages) over a user-selected time window for each loaded boat. Tack-manoeuvre periods are excluded from boat-speed, angle, VMG and polar-percentage averages. If a race start/finish line is configured, a separate race-stats block shows late-at-start, finish time, elapsed time, IRC corrected time, and distance sailed alongside GPS distance.</dd>
+
+          <dt>Polars</dt>
+          <dd>Loads an Expedition .pol polar file and shows it as a half-polar plot plus a TWS × TWA grid. With CSV log files also loaded, it suggests refinements to the polar's boat-speed targets based on what the boat actually did: each log gets its own quality window and an enable toggle so you can blend several races, and the pipeline averages BSP/TWA/TWS over 60-second windows, rejecting any window overlapping a tack or gybe (with buffer), with too-large TWS or TWD swings, or with too-large heading swings such as mark roundings or accidental luffs. For each polar cell it scales the polar's BSP by a chosen percentile of observed-vs-polar ratios, leaving cells without enough data alone. It also detects observed best-VMG upwind and downwind angles per TWS and, where they differ from the polar's by more than a configurable threshold, moves the polar's upwind entry to the new (TWA, BSP). The plot supports clicking a TWS curve to focus that wind speed (others fade), mouse-wheel zoom centred on the cursor (double-click resets), and dragging any data point on the focused curve to manually override its (TWA, BSP). All thresholds live behind a Filtering parameters button, an Optimum angle analysis sub-table summarises polar vs observed (or manual) optima, and Save polars writes the refined polar to a downloadable .pol file.</dd>
 
           <dt>Tacking</dt>
           <dd>Plots VMG through the tack, compares TWD before and after the tack, estimates the ground lost in the tack, counts the number of tacks, and calculates the average difference in TWD immediately before and after the tack, and the average ground lost in the tack. Calculations of ground lost take the average VMG between 40 and 10 seconds before the tack as a reference, and calculate the integrated loss in VMG from 10s before the tack to 50s after.</dd>
 
           <dt>Gybing</dt>
-          <dd>As Tacking but for gybing.</dd>
-
-          <dt>Graph</dt>
-          <dd>Allows the user to select variables and plot them against time. For AWA and TWA only, the |±| button toggles between showing the actual AWA / TWA and the magnitude, converting negative values to positive and colour-coding which tack the boat is on. This feature only really works well with a single boat, as for multiple boats the lines are all coloured red and green for port and starboard tack respectively.</dd>
-
-          <dt>Statistics</dt>
-          <dd>Displays average values of key variables over a selected time window, with standard deviations. Tack manoeuvre periods are excluded from angle, boat speed, VMG, and polar percentage averages.</dd>
+          <dd>As tacking but for gybing.</dd>
         </dl>
-
-        <p>The viewer can be used with a single boat, but is particularly insightful when used with log files from multiple similar boats, as that allows both performance and calibration to be compared.</p>
       </div>
     </div>
 
@@ -185,12 +213,23 @@
     </div>
   </div>
 
+  <!-- ── Polar quality-filter parameters modal ───────────────────────────────── -->
+  <div id="polar-params-modal" class="modal-backdrop hidden">
+    <div class="modal-box modal-box-wide">
+      <h3>Quality filter parameters</h3>
+      <div id="polars-params-grid"></div>
+      <button id="btn-polar-params-close">Done</button>
+    </div>
+  </div>
+
   <!-- ── Scripts ──────────────────────────────────────────────────────────────── -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/js/parser.js"></script>
+  <script src="/js/polar.js"></script>
+  <script src="/js/polar_refine.js"></script>
+  <script src="/js/polar_view.js"></script>
   <script src="/js/map.js"></script>
   <script src="/js/playback.js"></script>
-  <script src="/js/analysis.js"></script>
   <script src="/js/graph.js"></script>
   <script src="/js/app.js"></script>
 
