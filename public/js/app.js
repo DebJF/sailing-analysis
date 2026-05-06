@@ -1689,6 +1689,12 @@ const App = (() => {
       .map(n => String(n).padStart(2, '0')).join(':');
   }
 
+  function fmtUTCDate(ms) {
+    const d = new Date(ms);
+    return [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]
+      .map((n, i) => String(n).padStart(i === 0 ? 4 : 2, '0')).join('-');
+  }
+
   function fmtUTCDateTime(ms) {
     const d = new Date(ms);
     const date = [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]
@@ -2204,15 +2210,12 @@ const App = (() => {
     const el = document.getElementById('race-setup');
     if (!el) return;
 
-    let dateStr = '';
-    if (boats.size > 0) {
-      const d = new Date(boats.values().next().value.boat.minTs);
-      dateStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-    }
+    const logMinTs = boats.size > 0 ? boats.values().next().value.boat.minTs : null;
+    const startDateVal = raceStartTime ? fmtUTCDate(raceStartTime) : (logMinTs ? fmtUTCDate(logMinTs) : '');
+    const startTimeVal = raceStartTime ? fmtUTC(raceStartTime) : '';
 
     const presetKeys = [...Object.keys(RACE_LINES), 'custom'];
     const presetLabel = k => k === 'custom' ? 'Custom' : RACE_LINES[k].label;
-    const startTimeVal = raceStartTime ? fmtUTC(raceStartTime) : '';
 
     const radioRow = (name, current) => presetKeys.map(k =>
       `<label><input type="radio" name="${name}" value="${k}"${current === k ? ' checked' : ''}> ${presetLabel(k)}</label>`
@@ -2224,7 +2227,8 @@ const App = (() => {
         <div class="race-radio-group">${radioRow('race-start', raceStartPreset)}</div>
         <button id="btn-place-start"${raceStartPreset !== 'custom' ? ' class="hidden-control"' : ''}>Place on map ↗</button>
         <div class="race-start-time">
-          <label for="race-start-time-input">Start time (UTC)${dateStr ? ` <span class="race-date">${dateStr}</span>` : ''}</label>
+          <label>Start (UTC)</label>
+          <input type="text" id="race-start-date-input" placeholder="YYYY-MM-DD" value="${startDateVal}" autocomplete="off">
           <input type="text" id="race-start-time-input" placeholder="HH:MM:SS" value="${startTimeVal}" autocomplete="off">
           <button id="btn-race-from-playback">← playback</button>
         </div>
@@ -2279,15 +2283,27 @@ const App = (() => {
       });
     });
 
-    document.getElementById('race-start-time-input').addEventListener('input', e => {
+    const readStartTs = () => {
+      const dateVal = document.getElementById('race-start-date-input').value.trim();
+      const timeVal = document.getElementById('race-start-time-input').value.trim();
+      if (!timeVal) return null;
       const refTs = boats.size > 0 ? boats.values().next().value.boat.minTs : Date.now();
-      raceStartTime = parseUTCTime(e.target.value, refTs);
+      return parseUTCTime(dateVal ? `${dateVal} ${timeVal}` : timeVal, refTs);
+    };
+
+    document.getElementById('race-start-date-input').addEventListener('input', () => {
+      raceStartTime = readStartTs();
+      updateRaceDisplay();
+    });
+    document.getElementById('race-start-time-input').addEventListener('input', () => {
+      raceStartTime = readStartTs();
       updateRaceDisplay();
     });
 
     document.getElementById('btn-race-from-playback').addEventListener('click', () => {
       const ts = Playback.getState().currentTs;
       raceStartTime = ts;
+      document.getElementById('race-start-date-input').value = fmtUTCDate(ts);
       document.getElementById('race-start-time-input').value = fmtUTC(ts);
       updateRaceDisplay();
     });

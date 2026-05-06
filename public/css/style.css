@@ -1072,6 +1072,7 @@ button.polar-export-btn:disabled {
   opacity: 0.7;
 }
 
+#race-start-date-input,
 #race-start-time-input {
   background: var(--panel2);
   border: 1px solid var(--border);
@@ -1080,9 +1081,11 @@ button.polar-export-btn:disabled {
   padding: 3px 8px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  width: 84px;
   outline: none;
 }
+#race-start-date-input { width: 96px; }
+#race-start-time-input { width: 72px; }
+#race-start-date-input:focus,
 #race-start-time-input:focus { border-color: var(--accent); }
 
 #btn-race-from-playback { font-size: 11px; }
