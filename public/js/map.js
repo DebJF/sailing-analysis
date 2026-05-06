@@ -121,8 +121,8 @@ const MapManager = (() => {
   const BOAT_VW = 14, BOAT_VH = 24;
 
   function buildBoatIcon(color, heading) {
-    const W  = BOAT_VW * 2;
-    const H  = BOAT_VH * 2;
+    const W  = Math.round(BOAT_VW * 1.4);
+    const H  = Math.round(BOAT_VH * 1.4);
     const ax = W / 2;
     const ay = H / 2;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${BOAT_VW} ${BOAT_VH}"><path d="M 7,1 C 13,8 13,17 11,22 L 3,22 C 1,17 1,8 7,1 Z" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
