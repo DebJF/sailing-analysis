@@ -432,15 +432,19 @@ const App = (() => {
     if (tackColorMode) {
       MapManager.setTackMode(boat, computeTackSegments(boats.get(boat.name)));
     }
-    if (currentView === 'twd')  renderTwdTable();
-    if (currentView === 'gybe') renderGybeTable();
-    if (currentView === 'stats') renderStatsTab();
-    if (currentView === 'polars') refreshPolarSamples();
     updateRaceDisplay();
+
+    // Clear stats inputs so they reinitialise to the new (possibly merged) time range
+    elStatsStart.value = '';
+    elStatsEnd.value   = '';
 
     recalcPlaybackRange();
     renderGraphControls();
-    if (currentView === 'graph') Graph.render(collectGraphData());
+    if (currentView === 'twd')    renderTwdTable();
+    if (currentView === 'gybe')   renderGybeTable();
+    if (currentView === 'stats')  renderStatsTab();
+    if (currentView === 'polars') refreshPolarSamples();
+    if (currentView === 'graph')  Graph.render(collectGraphData());
     if (windBarbsVisible) MapManager.showWindBarbs(boat, computeWindBarbs(boats.get(boat.name)));
 
     // Show the UI
@@ -1627,8 +1631,8 @@ const App = (() => {
 
   function renderStatsTab() {
     const { trimStart, trimEnd } = Playback.getState();
-    if (!elStatsStart.value) elStatsStart.value = fmtUTC(trimStart);
-    if (!elStatsEnd.value)   elStatsEnd.value   = fmtUTC(trimEnd);
+    if (!elStatsStart.value) elStatsStart.value = fmtUTCDateTime(trimStart);
+    if (!elStatsEnd.value)   elStatsEnd.value   = fmtUTCDateTime(trimEnd);
 
     const startTs = parseUTCTime(elStatsStart.value, trimStart) ?? trimStart;
     const endTs   = parseUTCTime(elStatsEnd.value,   trimStart) ?? trimEnd;
