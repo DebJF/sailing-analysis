@@ -437,6 +437,7 @@ const App = (() => {
     // Clear stats inputs so they reinitialise to the new (possibly merged) time range
     elStatsStart.value = '';
     elStatsEnd.value   = '';
+    graphXScale = { mode: 'auto' };
 
     recalcPlaybackRange();
     renderGraphControls();
