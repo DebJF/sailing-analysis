@@ -121,11 +121,10 @@ const MapManager = (() => {
   const BOAT_VW = 14, BOAT_VH = 24;
 
   function buildBoatIcon(color, heading) {
-    const s  = barbScale();
-    const W  = Math.round(BOAT_VW * s);
-    const H  = Math.round(BOAT_VH * s);
-    const ax = Math.round(W / 2);
-    const ay = Math.round(H / 2);
+    const W  = BOAT_VW * 2;
+    const H  = BOAT_VH * 2;
+    const ax = W / 2;
+    const ay = H / 2;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${BOAT_VW} ${BOAT_VH}"><path d="M 7,1 C 13,8 13,17 11,22 L 3,22 C 1,17 1,8 7,1 Z" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
     const html = `<div style="width:${W}px;height:${H}px;transform:rotate(${heading}deg);transform-origin:${ax}px ${ay}px">${svg}</div>`;
     return L.divIcon({ html, className: '', iconSize: [W, H], iconAnchor: [ax, ay] });
