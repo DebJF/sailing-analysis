@@ -434,13 +434,13 @@ const App = (() => {
     }
     if (currentView === 'twd')  renderTwdTable();
     if (currentView === 'gybe') renderGybeTable();
-    if (currentView === 'graph') Graph.render(collectGraphData());
     if (currentView === 'stats') renderStatsTab();
     if (currentView === 'polars') refreshPolarSamples();
     updateRaceDisplay();
 
     recalcPlaybackRange();
     renderGraphControls();
+    if (currentView === 'graph') Graph.render(collectGraphData());
     if (windBarbsVisible) MapManager.showWindBarbs(boat, computeWindBarbs(boats.get(boat.name)));
 
     // Show the UI
