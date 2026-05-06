@@ -376,7 +376,49 @@ const App = (() => {
 
   // ── Boat management ───────────────────────────────────────────────────────────
 
+  function mergeBoats(existing, incoming) {
+    const mergedFieldMap = { ...existing.fieldMap };
+    const mergedNameToId = { ...existing.nameToId };
+    const idRemap = new Map();
+
+    for (const [idStr, name] of Object.entries(incoming.fieldMap)) {
+      const inId = parseInt(idStr, 10);
+      if (mergedNameToId[name] !== undefined) {
+        idRemap.set(inId, mergedNameToId[name]);
+      } else {
+        mergedFieldMap[inId] = name;
+        mergedNameToId[name] = inId;
+        idRemap.set(inId, inId);
+      }
+    }
+
+    const remappedRows = incoming.rows.map(row => ({
+      ...row,
+      fields: Object.fromEntries(
+        Object.entries(row.fields)
+          .map(([id, val]) => [idRemap.get(parseInt(id, 10)) ?? parseInt(id, 10), val])
+      ),
+    }));
+
+    const mergedRows    = [...existing.rows,    ...remappedRows]       .sort((a, b) => a.ts - b.ts);
+    const mergedGpsRows = [...existing.gpsRows, ...incoming.gpsRows]   .sort((a, b) => a.ts - b.ts);
+
+    return {
+      name:     existing.name,
+      color:    existing.color,
+      fieldMap: mergedFieldMap,
+      nameToId: mergedNameToId,
+      rows:     mergedRows,
+      gpsRows:  mergedGpsRows,
+      minTs:    Math.min(existing.minTs, incoming.minTs),
+      maxTs:    Math.max(existing.maxTs, incoming.maxTs),
+    };
+  }
+
   function addBoat(boat) {
+    if (boats.has(boat.name)) {
+      boat = mergeBoats(boats.get(boat.name).boat, boat);
+    }
     // Build per-field time series for carry-forward value lookups
     const fieldTimeseries = buildFieldTimeseries(boat);
     boats.set(boat.name, { boat, fieldTimeseries });
