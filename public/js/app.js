@@ -898,8 +898,8 @@ const App = (() => {
       html += `<tr data-boat="${safeName}">` +
         `<td><input type="checkbox" class="pl-enabled" ${st.enabled ? 'checked' : ''}></td>` +
         `<td><span class="boat-dot" style="background:${entry.boat.color}"></span>${name}</td>` +
-        `<td><input type="text" class="pl-start" value="${fmtUTC(st.qualityStart)}"></td>` +
-        `<td><input type="text" class="pl-end"   value="${fmtUTC(st.qualityEnd)}"></td>` +
+        `<td><input type="text" class="pl-start" value="${fmtUTCDateTime(st.qualityStart)}"></td>` +
+        `<td><input type="text" class="pl-end"   value="${fmtUTCDateTime(st.qualityEnd)}"></td>` +
         `<td><button class="pl-from-trim" title="Copy current Map-tab trim into this log's quality window">From trim</button></td>` +
         `<td class="pl-samples">${samplesText}</td>` +
         `</tr>`;

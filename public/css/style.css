@@ -493,7 +493,7 @@ button.polar-export-btn:disabled {
   color: var(--muted);
 }
 .polars-logs-table input[type="text"] {
-  width: 76px;
+  width: 140px;
   background: var(--panel2);
   color: var(--text);
   border: 1px solid var(--border);
