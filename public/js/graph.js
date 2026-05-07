@@ -149,10 +149,7 @@ const Graph = (() => {
   }
 
   function drawBand(ctx, s, bandTop, bandH, plotW, toX, xStart, xEnd, xInterval) {
-    const allVals = s.absTack
-      ? s.boats.flatMap(b => (b.absTackPoints || []).map(p => p.val))
-      : s.boats.flatMap(b => b.points.map(p => p.val));
-    if (allVals.length === 0) return;
+    if (s.boats.length === 0) return;
 
     const isManual = s.scale && s.scale.mode === 'manual';
     let yMin, yMax;
@@ -160,8 +157,11 @@ const Graph = (() => {
       yMin = s.scale.min;
       yMax = s.scale.max;
     } else {
-      yMin = Math.min(...allVals);
-      yMax = Math.max(...allVals);
+      yMin = s.boats[0].min; yMax = s.boats[0].max;
+      for (let i = 1; i < s.boats.length; i++) {
+        if (s.boats[i].min < yMin) yMin = s.boats[i].min;
+        if (s.boats[i].max > yMax) yMax = s.boats[i].max;
+      }
       if (yMin === yMax) { yMin -= 1; yMax += 1; }
       const pad = (yMax - yMin) * 0.1;
       yMin -= pad;
@@ -333,6 +333,13 @@ const Graph = (() => {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
 
+    const dStart = new Date(xStart);
+    const dEnd   = new Date(xEnd);
+    const startDay = Date.UTC(dStart.getUTCFullYear(), dStart.getUTCMonth(), dStart.getUTCDate());
+    const endDay   = Date.UTC(dEnd.getUTCFullYear(),   dEnd.getUTCMonth(),   dEnd.getUTCDate());
+    const multiDay = endDay > startDay;
+    let prevDay = null;
+
     for (let ts = firstTick; ts <= xEnd; ts += xInterval * 1000) {
       const px = toX(ts);
       const d = new Date(ts);
@@ -344,14 +351,24 @@ const Graph = (() => {
       ctx.lineTo(px, axisY + 4);
       ctx.stroke();
       ctx.fillText(label, px, axisY + 6);
+
+      if (multiDay) {
+        const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        if (day !== prevDay) {
+          const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const da = String(d.getUTCDate()).padStart(2, '0');
+          ctx.fillText(`${mo}-${da}`, px, axisY + 18);
+          prevDay = day;
+        }
+      }
     }
 
-    // Axis title
+    // Axis title — shift down in multi-day mode to clear the date row
     ctx.fillStyle = isManualX ? '#1e88e5' : TITLE;
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('Time (UTC)', M.left + plotW / 2, axisY + 30);
+    ctx.fillText('Time (UTC)', M.left + plotW / 2, axisY + (multiDay ? 38 : 30));
   }
 
   function drawCursor(ctx, W, H, ts, xStart, xEnd, dpr) {

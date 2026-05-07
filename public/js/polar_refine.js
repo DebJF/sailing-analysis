@@ -319,8 +319,12 @@ const PolarRefine = (() => {
         const sampleCount = bin ? bin.ratios.length : 0;
         const base = { twa: pt.twa, bsp: pt.bsp, bspOld: pt.bsp, originalTwa: pt.twa, sampleCount };
         if (!bin || pt.bsp <= 0.01) { base.recommended = false; return base; }
-        const minTs = Math.min(...bin.timestamps);
-        const maxTs = Math.max(...bin.timestamps);
+        let minTs = bin.timestamps[0], maxTs = bin.timestamps[0];
+        for (let i = 1; i < bin.timestamps.length; i++) {
+          const t = bin.timestamps[i];
+          if (t < minTs) minTs = t;
+          else if (t > maxTs) maxTs = t;
+        }
         base.timeSpanSec = (maxTs - minTs) / 1000;
         const enough = sampleCount >= p.minSamples && base.timeSpanSec >= p.minSpanSec;
         if (!enough) { base.recommended = false; return base; }

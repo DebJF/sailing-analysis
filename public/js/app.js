@@ -1006,10 +1006,15 @@ const App = (() => {
     return series.slice(start, lo);
   }
 
+  // Gaps longer than this between consecutive samples are treated as missing
+  // data — used by stats warnings and to suppress fake events (tacks, gybes,
+  // race-line crossings) interpolated across the seam of merged daily logs.
+  const MAX_GAP_MS = 60000;
+
   function hasSeriesGap(series, startTs, endTs) {
     const slice = sliceSeriesByTs(series, startTs, endTs);
     for (let i = 1; i < slice.length; i++) {
-      if (slice[i].ts - slice[i-1].ts > 60000) return true;
+      if (slice[i].ts - slice[i-1].ts > MAX_GAP_MS) return true;
     }
     return false;
   }
@@ -1024,7 +1029,13 @@ const App = (() => {
     const mean = circularMean(vals);
     if (slice.length < 2) return { mean, range: 0 };
     const rotated = vals.map(v => normalizeAngle(v - mean));
-    return { mean, range: Math.max(...rotated) - Math.min(...rotated) };
+    let rMin = rotated[0], rMax = rotated[0];
+    for (let i = 1; i < rotated.length; i++) {
+      const v = rotated[i];
+      if (v < rMin) rMin = v;
+      else if (v > rMax) rMax = v;
+    }
+    return { mean, range: rMax - rMin };
   }
 
   // Tack analysis windows (ms relative to tack timestamp)
@@ -1048,6 +1059,7 @@ const App = (() => {
       const prev = series[i - 1];
       const curr = series[i];
       if (curr.ts < trimStart || prev.ts > trimEnd) continue;
+      if (curr.ts - prev.ts > MAX_GAP_MS) continue;
       if (Math.abs(prev.val) >= 90 || Math.abs(curr.val) >= 90) continue;
       if (prev.val * curr.val >= 0) continue; // no sign change
 
@@ -1354,6 +1366,7 @@ const App = (() => {
       const prev = series[i - 1];
       const curr = series[i];
       if (curr.ts < trimStart || prev.ts > trimEnd) continue;
+      if (curr.ts - prev.ts > MAX_GAP_MS) continue;
       if (Math.abs(prev.val) < 90 || Math.abs(curr.val) < 90) continue;
       if (prev.val * curr.val >= 0) continue;
 
@@ -1551,12 +1564,12 @@ const App = (() => {
       if (bspSeries) {
         const slice = sliceSeriesByTs(bspSeries, firstStart.ts, firstFinish.ts);
         if (slice.length >= 2) {
-          if (slice[0].ts - firstStart.ts > 60000) hasBspGap = true;
-          if (firstFinish.ts - slice[slice.length - 1].ts > 60000) hasBspGap = true;
+          if (slice[0].ts - firstStart.ts > MAX_GAP_MS) hasBspGap = true;
+          if (firstFinish.ts - slice[slice.length - 1].ts > MAX_GAP_MS) hasBspGap = true;
           let dist = 0;
           for (let i = 1; i < slice.length; i++) {
             const dtHrs = (slice[i].ts - slice[i-1].ts) / 3600000;
-            if (slice[i].ts - slice[i-1].ts > 60000) hasBspGap = true;
+            if (slice[i].ts - slice[i-1].ts > MAX_GAP_MS) hasBspGap = true;
             dist += ((slice[i].val + slice[i-1].val) / 2) * dtHrs;
           }
           distanceSailed = Math.max(0, dist);
@@ -1571,12 +1584,12 @@ const App = (() => {
     if (firstStart && firstFinish) {
       const rows = entry.boat.gpsRows.filter(r => r.ts >= firstStart.ts && r.ts <= firstFinish.ts);
       if (rows.length >= 2) {
-        if (rows[0].ts - firstStart.ts > 60000) hasDataGap = true;
-        if (firstFinish.ts - rows[rows.length - 1].ts > 60000) hasDataGap = true;
+        if (rows[0].ts - firstStart.ts > MAX_GAP_MS) hasDataGap = true;
+        if (firstFinish.ts - rows[rows.length - 1].ts > MAX_GAP_MS) hasDataGap = true;
         let dist = 0;
         for (let i = 1; i < rows.length; i++) {
           const gap = rows[i].ts - rows[i-1].ts;
-          if (gap > 60000) hasDataGap = true;
+          if (gap > MAX_GAP_MS) hasDataGap = true;
           dist += haversineNm(rows[i-1].lat, rows[i-1].lon, rows[i].lat, rows[i].lon);
         }
         gpsDistance = dist;
@@ -1857,10 +1870,19 @@ const App = (() => {
                 ? pts.map(p => ({ ts: p.ts, val: Math.abs(p.val), _sign: Math.sign(p.val) }))
                 : null;
               const sourcePts = isAbsTack ? absTackPoints : pts;
-              const avg = sourcePts.length > 0
-                ? sourcePts.reduce((s, p) => s + p.val, 0) / sourcePts.length
-                : null;
-              return { name: entry.boat.name, color: entry.boat.color, points: pts, absTackPoints, avg };
+              let avg = null, min = null, max = null;
+              if (sourcePts.length > 0) {
+                let sum = 0;
+                min = sourcePts[0].val; max = sourcePts[0].val;
+                for (let i = 0; i < sourcePts.length; i++) {
+                  const v = sourcePts[i].val;
+                  sum += v;
+                  if (v < min) min = v;
+                  else if (v > max) max = v;
+                }
+                avg = sum / sourcePts.length;
+              }
+              return { name: entry.boat.name, color: entry.boat.color, points: pts, absTackPoints, avg, min, max };
             })
             .filter(b => b.points.length > 0),
         };
@@ -2159,6 +2181,7 @@ const App = (() => {
       const startCrossings = [], finishCrossings = [];
       for (let i = 1; i < rows.length; i++) {
         const p1 = rows[i - 1], p2 = rows[i];
+        if (p2.ts - p1.ts > MAX_GAP_MS) continue;
         if (raceStartLine) {
           const t = lineCrossing(p1, p2, raceStartLine.a, raceStartLine.b);
           if (t !== null) {
