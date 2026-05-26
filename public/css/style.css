@@ -95,6 +95,25 @@ body {
 .upload-btn:hover { background: #1565c0; }
 .upload-btn input { display: none; }
 
+.min-spacing-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.min-spacing-ctrl input {
+  width: 50px;
+  padding: 3px 6px;
+  border: 1px solid #2a4660;
+  border-radius: 4px;
+  background: #0f1923;
+  color: #c8e6f5;
+  font-size: 12px;
+  text-align: right;
+}
+
 /* Main area */
 #main {
   flex: 1;

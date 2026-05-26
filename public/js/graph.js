@@ -242,29 +242,29 @@ const Graph = (() => {
         const pts = b.absTackPoints;
         let i = 0;
         while (i < pts.length) {
-          const segSign = pts[i]._sign >= 0 ? 1 : -1;
+          const segSign = pts.sign[i] >= 0 ? 1 : -1;
           ctx.strokeStyle = segSign >= 0 ? STBD_COLOR : PORT_COLOR;
           ctx.beginPath();
-          ctx.moveTo(toX(pts[i].ts), toY(pts[i].val));
+          ctx.moveTo(toX(pts.ts[i]), toY(pts.val[i]));
           let j = i + 1;
-          while (j < pts.length && (pts[j]._sign >= 0 ? 1 : -1) === segSign) {
-            ctx.lineTo(toX(pts[j].ts), toY(pts[j].val));
+          while (j < pts.length && (pts.sign[j] >= 0 ? 1 : -1) === segSign) {
+            ctx.lineTo(toX(pts.ts[j]), toY(pts.val[j]));
             j++;
           }
           // Extend one point into the next segment to avoid a gap at the zero crossing
-          if (j < pts.length) ctx.lineTo(toX(pts[j].ts), toY(pts[j].val));
+          if (j < pts.length) ctx.lineTo(toX(pts.ts[j]), toY(pts.val[j]));
           ctx.stroke();
           i = j;
         }
       } else {
         ctx.strokeStyle = b.color;
         ctx.beginPath();
-        let started = false;
-        for (const { ts, val } of b.points) {
-          const px = toX(ts);
-          const py = toY(val);
-          if (!started) { ctx.moveTo(px, py); started = true; }
-          else ctx.lineTo(px, py);
+        const pts = b.points;
+        for (let i = 0; i < pts.length; i++) {
+          const px = toX(pts.ts[i]);
+          const py = toY(pts.val[i]);
+          if (i === 0) ctx.moveTo(px, py);
+          else         ctx.lineTo(px, py);
         }
         ctx.stroke();
       }

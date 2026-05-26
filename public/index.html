@@ -22,6 +22,11 @@
       <button id="tab-gybe"    class="tab-btn">Gybing</button>
       <button id="tab-about"   class="tab-btn">About</button>
     </nav>
+    <label class="min-spacing-ctrl" title="Decimate dense logs at parse time: when a row falls within this many seconds of the previously kept row it is dropped (per file). A log already sparser than this is unaffected. Applies on next upload.">
+      Min spacing
+      <input type="number" id="min-spacing-sec" min="0" max="3600" value="1" step="0.5">
+      s
+    </label>
     <label class="upload-btn" title="Upload Expedition CSV log files or .pol polar files">
       + Upload Files
       <input type="file" id="file-input" multiple accept=".csv,.pol">
@@ -224,6 +229,7 @@
 
   <!-- ── Scripts ──────────────────────────────────────────────────────────────── -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/series.js"></script>
   <script src="/js/parser.js"></script>
   <script src="/js/polar.js"></script>
   <script src="/js/polar_refine.js"></script>

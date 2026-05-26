@@ -13,6 +13,21 @@ const App = (() => {
 
   const DEFAULT_VAR_NAMES = ['BSP', 'TWS', 'TWA'];
 
+  // Fields kept at parse time. Anything else in the CSV is dropped before
+  // parseFloat — saves both memory and parse cost. Lat/Lon are kept
+  // unconditionally (the parser needs them for GPS positions).
+  const KEEP_FIELDS = new Set([
+    // GPS (positional)
+    'Lat', 'Lon', 'Mk Lat', 'Mk Lon',
+    // Core wind / boat / motion — referenced by detection, stats, playback
+    'BSP', 'TWA', 'TWD', 'TWS', 'AWA', 'AWS', 'HDG', 'COG', 'VMG', 'SOG',
+    'Heel', 'Rudder', 'Depth', 'Baro',
+    // Polar-related
+    'PolBsp', 'PolBsp%', 'VMG%', 'Targ Twa', 'Targ Bsp', 'Pol0%',
+    // User-opted-in optionals (current/leeway analysis + spare polar copy)
+    'Leeway', 'Set', 'Drift', 'PredSet', 'PredDrift', 'Polar bsp',
+  ]);
+
   const PORT_COLOR = '#e53935';
   const STBD_COLOR = '#43a047';
   const ABS_TACK_VARS = new Set(['AWA', 'TWA']);
@@ -63,8 +78,14 @@ const App = (() => {
 
   // ── State ────────────────────────────────────────────────────────────────────
 
-  // name → { boat, fieldTimeseries: Map<fieldId, [{ts,val}]> }
+  // name → { boat, fieldTimeseries: Map<fieldId, Series> }
   const boats = new Map();
+
+  // Per-boat memoised full-range tack/gybe detection results. Invalidated on
+  // boat add/merge/remove; trim changes do NOT invalidate (the in-range filter
+  // re-runs over the cached list — cheap).
+  const tackCache = new Map();  // boatName → [tack, ...]
+  const gybeCache = new Map();
 
   // Loaded Expedition .pol polar (see polar.js). Null until the user loads one.
   let loadedPolar = null;
@@ -77,6 +98,11 @@ const App = (() => {
   // and dragging different points on the same TWS each get their own entry.
   // Survives parameter changes and sample changes; cleared only on polar reload.
   const polarManualOverrides = new Map();
+  // Undo stack for drag-edits: each entry records the key and the value the
+  // entry held before the drag (`undefined` if it didn't exist), so undo can
+  // either restore or delete. Bounded — drag history is conceptually small.
+  const POLAR_UNDO_LIMIT = 100;
+  const polarOverrideUndo = [];
 
   // Field names visible in the variable panel
   let displayedVars = [...DEFAULT_VAR_NAMES];
@@ -305,6 +331,17 @@ const App = (() => {
     elBtnModalOk.addEventListener('click', confirmBoatName);
     elBoatNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmBoatName(); });
 
+    // Ctrl/Cmd+Z on the Polars tab undoes the most recent drag-edit. Suppressed
+    // when focus is in a text field so the browser's native input undo still
+    // works for the boat-name modal, stats time inputs, etc.
+    document.addEventListener('keydown', e => {
+      if (currentView !== 'polars') return;
+      if (!(e.key === 'z' || e.key === 'Z') || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (undoPolarOverride()) e.preventDefault();
+    });
+
     renderGraphControls();
     switchView('map');
   }
@@ -335,6 +372,7 @@ const App = (() => {
     }
     loadedPolarFilename = file.name;
     polarManualOverrides.clear();
+    polarOverrideUndo.length = 0;
     const fnEl = document.getElementById('polar-filename');
     if (fnEl) fnEl.textContent = file.name;
     PolarView.setPolar(loadedPolar);
@@ -346,13 +384,38 @@ const App = (() => {
   function processNextFile() {
     if (fileQueue.length === 0) return;
     const file = fileQueue[0];
-    // Default name: filename without extension
-    const defaultName = file.name.replace(/\.[^.]+$/, '');
     elModalFilename.textContent = file.name;
-    elBoatNameInput.value = defaultName;
+    elBoatNameInput.value = suggestBoatName(file.name);
     elModal.classList.remove('hidden');
     elBoatNameInput.focus();
     elBoatNameInput.select();
+  }
+
+  // Read the user-configured minimum sample spacing (in seconds) from the
+  // header input. Returns ms; 0 means "keep every row".
+  function getMinSpacingMs() {
+    const el = document.getElementById('min-spacing-sec');
+    const v = el ? parseFloat(el.value) : NaN;
+    return isFinite(v) && v > 0 ? v * 1000 : 0;
+  }
+
+  // Guess a sensible boat name from the filename so users uploading several
+  // logs from the same boat don't have to retype it. Prefers an already-loaded
+  // boat whose name appears in the filename (so subsequent days auto-merge),
+  // else the last hyphen/underscore-separated alphabetic token (the boat name
+  // is conventionally last in "log-DATE-Name.csv"-style filenames).
+  function suggestBoatName(filename) {
+    const base = filename.replace(/\.[^.]+$/, '');
+    for (const name of boats.keys()) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp('(?:^|[-_\\s.])' + escaped + '(?:[-_\\s.]|$)', 'i');
+      if (re.test(base)) return name;
+    }
+    const tokens = base.split(/[-_\s.]+/).filter(Boolean);
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      if (/^[A-Za-z][A-Za-z'-]+$/.test(tokens[i])) return tokens[i];
+    }
+    return base;
   }
 
   function confirmBoatName() {
@@ -366,7 +429,10 @@ const App = (() => {
 
   async function loadFile(file, name) {
     const text = await file.text();
-    const boat = Parser.parse(text, name);
+    const boat = Parser.parse(text, name, {
+      keepNames:    KEEP_FIELDS,
+      minSpacingMs: getMinSpacingMs(),
+    });
     if (boat.gpsRows.length === 0) {
       alert(`No GPS data found in ${file.name}`);
       return;
@@ -376,7 +442,9 @@ const App = (() => {
 
   // ── Boat management ───────────────────────────────────────────────────────────
 
-  function mergeBoats(existing, incoming) {
+  // Merge two boats' metadata and gpsRows; their typed-array timeseries are
+  // merged separately (passed in). Same-named fields collapse to one ID.
+  function mergeBoats(existing, incoming, existingTs, incomingTs) {
     const mergedFieldMap = { ...existing.fieldMap };
     const mergedNameToId = { ...existing.nameToId };
     const idRemap = new Map();
@@ -392,36 +460,46 @@ const App = (() => {
       }
     }
 
-    const remappedRows = incoming.rows.map(row => ({
-      ...row,
-      fields: Object.fromEntries(
-        Object.entries(row.fields)
-          .map(([id, val]) => [idRemap.get(parseInt(id, 10)) ?? parseInt(id, 10), val])
-      ),
-    }));
+    const mergedTs = new Map(existingTs);
+    for (const [inId, s] of incomingTs) {
+      const targetId = idRemap.get(inId) ?? inId;
+      if (mergedTs.has(targetId)) mergedTs.set(targetId, Series.merge(mergedTs.get(targetId), s));
+      else                        mergedTs.set(targetId, s);
+    }
 
-    const mergedRows    = [...existing.rows,    ...remappedRows]       .sort((a, b) => a.ts - b.ts);
-    const mergedGpsRows = [...existing.gpsRows, ...incoming.gpsRows]   .sort((a, b) => a.ts - b.ts);
+    const mergedGpsRows = Series.mergeRows(existing.gpsRows, incoming.gpsRows);
 
     return {
-      name:     existing.name,
-      color:    existing.color,
-      fieldMap: mergedFieldMap,
-      nameToId: mergedNameToId,
-      rows:     mergedRows,
-      gpsRows:  mergedGpsRows,
-      minTs:    Math.min(existing.minTs, incoming.minTs),
-      maxTs:    Math.max(existing.maxTs, incoming.maxTs),
+      boat: {
+        name:     existing.name,
+        color:    existing.color,
+        fieldMap: mergedFieldMap,
+        nameToId: mergedNameToId,
+        gpsRows:  mergedGpsRows,
+        minTs:    Math.min(existing.minTs, incoming.minTs),
+        maxTs:    Math.max(existing.maxTs, incoming.maxTs),
+      },
+      fieldTimeseries: mergedTs,
     };
   }
 
   function addBoat(boat) {
+    // Build the typed-array timeseries from boat.rows, then release the heavy
+    // row.fields objects — that intermediate state would otherwise dominate
+    // memory per loaded log.
+    let fieldTimeseries = buildFieldTimeseries(boat);
+    for (const r of boat.gpsRows) r.fields = null;
+    boat.rows = null;
+
     if (boats.has(boat.name)) {
-      boat = mergeBoats(boats.get(boat.name).boat, boat);
+      const existing = boats.get(boat.name);
+      const merged = mergeBoats(existing.boat, boat, existing.fieldTimeseries, fieldTimeseries);
+      boat = merged.boat;
+      fieldTimeseries = merged.fieldTimeseries;
     }
-    // Build per-field time series for carry-forward value lookups
-    const fieldTimeseries = buildFieldTimeseries(boat);
     boats.set(boat.name, { boat, fieldTimeseries });
+    tackCache.delete(boat.name);
+    gybeCache.delete(boat.name);
 
     // Collect all field names
     for (const [id, nm] of Object.entries(boat.fieldMap)) {
@@ -470,13 +548,30 @@ const App = (() => {
   }
 
   function buildFieldTimeseries(boat) {
-    // fieldId → [{ts, val}] sorted by ts (rows are already sorted)
-    const map = new Map();
+    // fieldId → Series of typed Float64Arrays, sorted by ts (rows already sorted).
+    // Two passes: count per field to size the typed arrays, then fill.
+    const counts = new Map();
     for (const row of boat.rows) {
-      for (const [fid, val] of Object.entries(row.fields)) {
-        const id = parseInt(fid, 10);
-        if (!map.has(id)) map.set(id, []);
-        map.get(id).push({ ts: row.ts, val });
+      for (const fid in row.fields) {
+        const id = +fid;
+        counts.set(id, (counts.get(id) || 0) + 1);
+      }
+    }
+    const map = new Map();
+    const idx = new Map();
+    for (const [id, c] of counts) {
+      map.set(id, Series.make(c));
+      idx.set(id, 0);
+    }
+    for (const row of boat.rows) {
+      const ts = row.ts;
+      for (const fid in row.fields) {
+        const id = +fid;
+        const s = map.get(id);
+        const i = idx.get(id);
+        s.ts[i] = ts;
+        s.val[i] = row.fields[fid];
+        idx.set(id, i + 1);
       }
     }
     return map;
@@ -487,7 +582,7 @@ const App = (() => {
     if (fieldId === undefined) return null;
     const series = entry.fieldTimeseries.get(fieldId);
     if (!series || series.length === 0) return null;
-    return carryForward(series, ts);
+    return Series.carryForward(series, ts);
   }
 
   function getFieldSeries(entry, fieldName) {
@@ -506,11 +601,11 @@ const App = (() => {
   function avgVmgInWindow(entry, fromTs, toTs) {
     const twaSeries = getFieldSeries(entry, 'TWA');
     if (!twaSeries) return null;
-    const slice = sliceSeriesByTs(twaSeries, fromTs, toTs);
+    const slice = Series.sliceByTs(twaSeries, fromTs, toTs);
     if (slice.length === 0) return null;
     let sum = 0, count = 0;
-    for (const { ts } of slice) {
-      const v = vmgAt(entry, ts);
+    for (let i = 0; i < slice.length; i++) {
+      const v = vmgAt(entry, slice.ts[i]);
       if (v !== null) { sum += v; count++; }
     }
     return count > 0 ? sum / count : null;
@@ -519,28 +614,18 @@ const App = (() => {
   function integrateVmg(entry, fromTs, toTs) {
     const twaSeries = getFieldSeries(entry, 'TWA');
     if (!twaSeries) return null;
-    const slice = sliceSeriesByTs(twaSeries, fromTs, toTs);
+    const slice = Series.sliceByTs(twaSeries, fromTs, toTs);
     if (slice.length < 2) return null;
     let integral = 0;
-    let prev = null;
-    for (const { ts } of slice) {
+    let prevTs = NaN, prevV = NaN;
+    for (let i = 0; i < slice.length; i++) {
+      const ts = slice.ts[i];
       const v = vmgAt(entry, ts);
-      if (v === null) { prev = null; continue; }
-      if (prev !== null) integral += (prev.v + v) / 2 * (ts - prev.ts) / 1000;
-      prev = { ts, v };
+      if (v === null) { prevTs = NaN; continue; }
+      if (!isNaN(prevTs)) integral += (prevV + v) / 2 * (ts - prevTs) / 1000;
+      prevTs = ts; prevV = v;
     }
     return integral; // knot-seconds
-  }
-
-  function carryForward(series, ts) {
-    if (ts < series[0].ts) return null;
-    if (ts >= series[series.length - 1].ts) return series[series.length - 1].val;
-    let lo = 0, hi = series.length - 1;
-    while (lo < hi - 1) {
-      const mid = (lo + hi) >> 1;
-      if (series[mid].ts <= ts) lo = mid; else hi = mid;
-    }
-    return series[lo].val;
   }
 
   function refreshWindBarbs() {
@@ -823,8 +908,19 @@ const App = (() => {
   function handlePointDrop(twsIdx, originalTwa, twa, bsp) {
     if (!loadedPolar) return;
     const key = `${twsIdx}:${originalTwa.toFixed(2)}`;
+    polarOverrideUndo.push({ key, prev: polarManualOverrides.get(key) });
+    if (polarOverrideUndo.length > POLAR_UNDO_LIMIT) polarOverrideUndo.shift();
     polarManualOverrides.set(key, { twa, bsp });
     refreshPolarSamples();
+  }
+
+  function undoPolarOverride() {
+    const op = polarOverrideUndo.pop();
+    if (!op) return false;
+    if (op.prev === undefined) polarManualOverrides.delete(op.key);
+    else                       polarManualOverrides.set(op.key, op.prev);
+    refreshPolarSamples();
+    return true;
   }
 
   function exportRefinedPolar() {
@@ -996,25 +1092,15 @@ const App = (() => {
     return d;
   }
 
-  // Binary-search slice of a [{ts,val}] series to a time window — O(log n)
-  function sliceSeriesByTs(series, fromTs, toTs) {
-    let lo = 0, hi = series.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (series[mid].ts < fromTs) lo = mid + 1; else hi = mid; }
-    const start = lo;
-    lo = start; hi = series.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (series[mid].ts <= toTs) lo = mid + 1; else hi = mid; }
-    return series.slice(start, lo);
-  }
-
   // Gaps longer than this between consecutive samples are treated as missing
   // data — used by stats warnings and to suppress fake events (tacks, gybes,
   // race-line crossings) interpolated across the seam of merged daily logs.
   const MAX_GAP_MS = 60000;
 
   function hasSeriesGap(series, startTs, endTs) {
-    const slice = sliceSeriesByTs(series, startTs, endTs);
+    const slice = Series.sliceByTs(series, startTs, endTs);
     for (let i = 1; i < slice.length; i++) {
-      if (slice[i].ts - slice[i-1].ts > MAX_GAP_MS) return true;
+      if (slice.ts[i] - slice.ts[i-1] > MAX_GAP_MS) return true;
     }
     return false;
   }
@@ -1023,19 +1109,9 @@ const App = (() => {
   function twdWindowStats(entry, fromTs, toTs) {
     const series = getFieldSeries(entry, 'TWD');
     if (!series) return null;
-    const slice = sliceSeriesByTs(series, fromTs, toTs);
+    const slice = Series.sliceByTs(series, fromTs, toTs);
     if (slice.length === 0) return null;
-    const vals = slice.map(p => p.val);
-    const mean = circularMean(vals);
-    if (slice.length < 2) return { mean, range: 0 };
-    const rotated = vals.map(v => normalizeAngle(v - mean));
-    let rMin = rotated[0], rMax = rotated[0];
-    for (let i = 1; i < rotated.length; i++) {
-      const v = rotated[i];
-      if (v < rMin) rMin = v;
-      else if (v > rMax) rMax = v;
-    }
-    return { mean, range: rMax - rMin };
+    return Series.circularStats(slice);
   }
 
   // Tack analysis windows (ms relative to tack timestamp)
@@ -1044,33 +1120,31 @@ const App = (() => {
   const TACK_INT_FROM  = -10000, TACK_INT_TO  =  50000;
   const TACK_INT_S = (TACK_INT_TO - TACK_INT_FROM) / 1000; // integration window in seconds
 
-  function detectTacks(entry, rangeStart, rangeEnd) {
+  // Detect across the *full* TWA series. Trim filtering is applied by the
+  // public detectTacks() wrapper so the heavy walk can be cached per boat.
+  function _detectTacksFullRange(entry) {
     const series = getFieldSeries(entry, 'TWA');
     if (!series || series.length < 2) return [];
 
-    const pb = Playback.getState();
-    const trimStart = rangeStart !== undefined ? rangeStart : pb.trimStart;
-    const trimEnd   = rangeEnd   !== undefined ? rangeEnd   : pb.trimEnd;
     const MIN_INTERVAL = 30000; // ms — ignore secondary sign-changes within 30 s
     const tacks = [];
     let lastTackTs = -Infinity;
 
     for (let i = 1; i < series.length; i++) {
-      const prev = series[i - 1];
-      const curr = series[i];
-      if (curr.ts < trimStart || prev.ts > trimEnd) continue;
-      if (curr.ts - prev.ts > MAX_GAP_MS) continue;
-      if (Math.abs(prev.val) >= 90 || Math.abs(curr.val) >= 90) continue;
-      if (prev.val * curr.val >= 0) continue; // no sign change
+      const prevTs = series.ts[i - 1], currTs = series.ts[i];
+      const prevVal = series.val[i - 1], currVal = series.val[i];
+      if (currTs - prevTs > MAX_GAP_MS) continue;
+      if (Math.abs(prevVal) >= 90 || Math.abs(currVal) >= 90) continue;
+      if (prevVal * currVal >= 0) continue; // no sign change
 
       // Interpolate zero-crossing time
-      const frac   = Math.abs(prev.val) / (Math.abs(prev.val) + Math.abs(curr.val));
-      const tackTs = prev.ts + frac * (curr.ts - prev.ts);
+      const frac   = Math.abs(prevVal) / (Math.abs(prevVal) + Math.abs(currVal));
+      const tackTs = prevTs + frac * (currTs - prevTs);
       if (tackTs - lastTackTs < MIN_INTERVAL) continue;
       const prevTackTs = lastTackTs;
       lastTackTs = tackTs;
 
-      const wasStarboard = prev.val > 0;
+      const wasStarboard = prevVal > 0;
       const before = twdWindowStats(entry, tackTs + TACK_PRE_FROM,  tackTs + TACK_PRE_TO);
       const after  = twdWindowStats(entry, tackTs + TACK_POST_FROM, tackTs + TACK_POST_TO);
       if (before === null || after === null) continue;
@@ -1083,8 +1157,9 @@ const App = (() => {
 
       // Pre-compute VMG profile for chart
       const profile = [];
-      const slice = sliceSeriesByTs(series, tackTs + TACK_PRE_FROM, tackTs + TACK_POST_TO);
-      for (const { ts } of slice) {
+      const slice = Series.sliceByTs(series, tackTs + TACK_PRE_FROM, tackTs + TACK_POST_TO);
+      for (let k = 0; k < slice.length; k++) {
+        const ts = slice.ts[k];
         const v = vmgAt(entry, ts);
         if (v !== null) profile.push({ t: (ts - tackTs) / 1000, vmg: v });
       }
@@ -1101,6 +1176,50 @@ const App = (() => {
       });
     }
     return tacks;
+  }
+
+  // Memoise full-range manoeuvre detection per boat and slice by trim on each
+  // call. Trim changes don't invalidate the cache — only add/merge/remove do.
+  function detectCached(entry, cache, computeFn, rangeStart, rangeEnd) {
+    const name = entry.boat.name;
+    let full = cache.get(name);
+    if (!full) { full = computeFn(entry); cache.set(name, full); }
+    const pb = Playback.getState();
+    const trimStart = rangeStart !== undefined ? rangeStart : pb.trimStart;
+    const trimEnd   = rangeEnd   !== undefined ? rangeEnd   : pb.trimEnd;
+    if (trimStart <= entry.boat.minTs && trimEnd >= entry.boat.maxTs) return full;
+    return full.filter(m => m.ts >= trimStart && m.ts <= trimEnd);
+  }
+
+  function detectTacks(entry, rangeStart, rangeEnd) {
+    return detectCached(entry, tackCache, _detectTacksFullRange, rangeStart, rangeEnd);
+  }
+
+  // Footer summary shared by Tacking and Gybing tabs.
+  function manoeuvreSummaryHtml(items, label, entry) {
+    const shifts   = items.map(m => normalizeAngle(m.portTwd - m.stbdTwd));
+    const avgShift = shifts.reduce((s, v) => s + v, 0) / shifts.length;
+    const twaCorr  = (avgShift / 2 >= 0 ? '+' : '') + (avgShift / 2).toFixed(1) + '°';
+    const glVals   = items.filter(m => m.groundLost !== null).map(m => m.groundLost);
+    const avgGl    = glVals.length ? (glVals.reduce((s, v) => s + v, 0) / glVals.length).toFixed(1) + ' m' : null;
+
+    const { trimStart, trimEnd } = Playback.getState();
+    const twsSeries = getFieldSeries(entry, 'TWS');
+    const twsSlice  = twsSeries ? Series.sliceByTs(twsSeries, trimStart, trimEnd) : null;
+    let avgTws = null;
+    if (twsSlice && twsSlice.length) {
+      let sum = 0;
+      for (let i = 0; i < twsSlice.length; i++) sum += twsSlice.val[i];
+      avgTws = (sum / twsSlice.length).toFixed(1) + ' kts';
+    }
+
+    const sep = '<span class="twd-summary-sep">·</span>';
+    return `<div class="twd-summary">
+      <span>${items.length} ${label}${items.length !== 1 ? 's' : ''}</span>
+      ${sep}<span>TWA correction: <strong>${twaCorr}</strong></span>
+      ${avgGl  !== null ? `${sep}<span>Avg ground lost: <strong>${avgGl}</strong></span>` : ''}
+      ${avgTws !== null ? `${sep}<span>Avg TWS: <strong>${avgTws}</strong></span>` : ''}
+    </div>`;
   }
 
   function renderTackVmgChart(profiles, canvasId, xLabel, emptyMsg, centreLabel) {
@@ -1290,26 +1409,7 @@ const App = (() => {
           </tr>`;
         }
         html += `</tbody></table>`;
-
-        // Summary row
-        const shifts = tacks.map(t => normalizeAngle(t.portTwd - t.stbdTwd));
-        const avgShift = shifts.reduce((s, v) => s + v, 0) / shifts.length;
-        const twaCorrStr = (avgShift / 2 >= 0 ? '+' : '') + (avgShift / 2).toFixed(1) + '°';
-        const glValues = tacks.filter(t => t.groundLost !== null).map(t => t.groundLost);
-        const avgGl = glValues.length > 0 ? (glValues.reduce((s, v) => s + v, 0) / glValues.length).toFixed(1) + ' m' : null;
-        const { trimStart, trimEnd } = Playback.getState();
-        const twsSeries = getFieldSeries(entry, 'TWS');
-        const twsSlice = twsSeries ? sliceSeriesByTs(twsSeries, trimStart, trimEnd) : [];
-        const avgTws = twsSlice.length > 0
-          ? (twsSlice.reduce((s, p) => s + p.val, 0) / twsSlice.length).toFixed(1) + ' kts'
-          : null;
-        html += `<div class="twd-summary">
-          <span>${tacks.length} tack${tacks.length !== 1 ? 's' : ''}</span>
-          <span class="twd-summary-sep">·</span>
-          <span>TWA correction: <strong>${twaCorrStr}</strong></span>
-          ${avgGl !== null ? `<span class="twd-summary-sep">·</span><span>Avg ground lost: <strong>${avgGl}</strong></span>` : ''}
-          ${avgTws !== null ? `<span class="twd-summary-sep">·</span><span>Avg TWS: <strong>${avgTws}</strong></span>` : ''}
-        </div>`;
+        html += manoeuvreSummaryHtml(tacks, 'tack', entry);
       }
       html += `</div>`;
     }
@@ -1351,33 +1451,29 @@ const App = (() => {
 
   // ── Gybe analysis ────────────────────────────────────────────────────────────
 
-  function detectGybes(entry, rangeStart, rangeEnd) {
+  function _detectGybesFullRange(entry) {
     const series = getFieldSeries(entry, 'TWA');
     if (!series || series.length < 2) return [];
 
-    const pb = Playback.getState();
-    const trimStart = rangeStart !== undefined ? rangeStart : pb.trimStart;
-    const trimEnd   = rangeEnd   !== undefined ? rangeEnd   : pb.trimEnd;
     const MIN_INTERVAL = 30000;
     const gybes = [];
     let lastGybeTs = -Infinity;
 
     for (let i = 1; i < series.length; i++) {
-      const prev = series[i - 1];
-      const curr = series[i];
-      if (curr.ts < trimStart || prev.ts > trimEnd) continue;
-      if (curr.ts - prev.ts > MAX_GAP_MS) continue;
-      if (Math.abs(prev.val) < 90 || Math.abs(curr.val) < 90) continue;
-      if (prev.val * curr.val >= 0) continue;
+      const prevTs = series.ts[i - 1], currTs = series.ts[i];
+      const prevVal = series.val[i - 1], currVal = series.val[i];
+      if (currTs - prevTs > MAX_GAP_MS) continue;
+      if (Math.abs(prevVal) < 90 || Math.abs(currVal) < 90) continue;
+      if (prevVal * currVal >= 0) continue;
 
-      const frac   = (180 - Math.abs(prev.val)) / ((180 - Math.abs(prev.val)) + (180 - Math.abs(curr.val)));
-      const gybeTs = prev.ts + frac * (curr.ts - prev.ts);
+      const frac   = (180 - Math.abs(prevVal)) / ((180 - Math.abs(prevVal)) + (180 - Math.abs(currVal)));
+      const gybeTs = prevTs + frac * (currTs - prevTs);
       if (gybeTs - lastGybeTs < MIN_INTERVAL) continue;
       const prevGybeTs = lastGybeTs;
       lastGybeTs = gybeTs;
 
-      // prev.val > 0 = was on starboard gybe → gybe turns to port; < 0 → turns to starboard
-      const wasOnStarboard    = prev.val > 0;
+      // prevVal > 0 = was on starboard gybe → gybe turns to port; < 0 → turns to starboard
+      const wasOnStarboard    = prevVal > 0;
       const turnedToStarboard = !wasOnStarboard;
 
       const before = twdWindowStats(entry, gybeTs + TACK_PRE_FROM,  gybeTs + TACK_PRE_TO);
@@ -1392,8 +1488,9 @@ const App = (() => {
         : null;
 
       const profile = [];
-      const slice = sliceSeriesByTs(series, gybeTs + TACK_PRE_FROM, gybeTs + TACK_POST_TO);
-      for (const { ts } of slice) {
+      const slice = Series.sliceByTs(series, gybeTs + TACK_PRE_FROM, gybeTs + TACK_POST_TO);
+      for (let k = 0; k < slice.length; k++) {
+        const ts = slice.ts[k];
         const v = vmgAt(entry, ts);
         if (v !== null) profile.push({ t: (ts - gybeTs) / 1000, vmg: -v }); // negate: downwind VMG is negative, chart shows positive progress
       }
@@ -1410,6 +1507,10 @@ const App = (() => {
       });
     }
     return gybes;
+  }
+
+  function detectGybes(entry, rangeStart, rangeEnd) {
+    return detectCached(entry, gybeCache, _detectGybesFullRange, rangeStart, rangeEnd);
   }
 
   function renderGybeTable() {
@@ -1469,6 +1570,7 @@ const App = (() => {
           </tr>`;
         }
         html += `</tbody></table>`;
+        html += manoeuvreSummaryHtml(gybes, 'gybe', entry);
       }
       html += `</div>`;
     }
@@ -1490,30 +1592,47 @@ const App = (() => {
     if (row.mode === 'avg' || row.mode === 'avgAbs') {
       const series = getFieldSeries(entry, row.key);
       if (!series) return null;
-      let slice = sliceSeriesByTs(series, startTs, endTs);
+      let slice = Series.sliceByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
-      if ((row.mode === 'avgAbs' || row.excludeTacks) && tackIntervals && tackIntervals.length > 0) {
-        slice = slice.filter(p => !tackIntervals.some(([from, to]) => p.ts >= from && p.ts <= to));
+      const excludeTacks = (row.mode === 'avgAbs' || row.excludeTacks)
+        && tackIntervals && tackIntervals.length > 0;
+      const tackSide = row.tack === 'port' ? -1 : row.tack === 'stbd' ? 1 : 0;
+      if (excludeTacks || tackSide !== 0) {
+        slice = Series.filter(slice, (ts, val) => {
+          if (excludeTacks) {
+            for (let i = 0; i < tackIntervals.length; i++) {
+              const iv = tackIntervals[i];
+              if (ts >= iv[0] && ts <= iv[1]) return false;
+            }
+          }
+          if (tackSide < 0 && !(val < 0)) return false;
+          if (tackSide > 0 && !(val > 0)) return false;
+          return true;
+        });
         if (slice.length === 0) return null;
       }
-      if (row.tack === 'port') slice = slice.filter(p => p.val < 0);
-      else if (row.tack === 'stbd') slice = slice.filter(p => p.val > 0);
-      if (slice.length === 0) return null;
-      const vals = slice.map(p => row.mode === 'avgAbs' ? Math.abs(p.val) : p.val);
-      const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
-      const se   = computeSE(vals.reduce((s, v) => s + (v - mean) ** 2, 0), vals.length);
-      return { mean, se };
+      let sum = 0;
+      for (let i = 0; i < slice.length; i++) {
+        sum += row.mode === 'avgAbs' ? Math.abs(slice.val[i]) : slice.val[i];
+      }
+      const mean = sum / slice.length;
+      let sumSq = 0;
+      for (let i = 0; i < slice.length; i++) {
+        const v = row.mode === 'avgAbs' ? Math.abs(slice.val[i]) : slice.val[i];
+        sumSq += (v - mean) ** 2;
+      }
+      return { mean, se: computeSE(sumSq, slice.length) };
     }
     if (row.mode === 'circular') {
       const series = getFieldSeries(entry, row.key);
       if (!series) return null;
-      const slice = sliceSeriesByTs(series, startTs, endTs);
+      const slice = Series.sliceByTs(series, startTs, endTs);
       if (slice.length === 0) return null;
-      const vals = slice.map(p => p.val);
-      const mean = circularMean(vals);
+      const mean = circularMean(slice.val);
       if (mean === null) return null;
-      const se = computeSE(vals.reduce((s, v) => s + normalizeAngle(v - mean) ** 2, 0), vals.length);
-      return { mean, se };
+      let sumSq = 0;
+      for (let i = 0; i < slice.length; i++) sumSq += normalizeAngle(slice.val[i] - mean) ** 2;
+      return { mean, se: computeSE(sumSq, slice.length) };
     }
     return null;
   }
@@ -1562,15 +1681,15 @@ const App = (() => {
     if (firstStart && firstFinish) {
       const bspSeries = getFieldSeries(entry, 'BSP');
       if (bspSeries) {
-        const slice = sliceSeriesByTs(bspSeries, firstStart.ts, firstFinish.ts);
+        const slice = Series.sliceByTs(bspSeries, firstStart.ts, firstFinish.ts);
         if (slice.length >= 2) {
-          if (slice[0].ts - firstStart.ts > MAX_GAP_MS) hasBspGap = true;
-          if (firstFinish.ts - slice[slice.length - 1].ts > MAX_GAP_MS) hasBspGap = true;
+          if (slice.ts[0] - firstStart.ts > MAX_GAP_MS) hasBspGap = true;
+          if (firstFinish.ts - slice.ts[slice.length - 1] > MAX_GAP_MS) hasBspGap = true;
           let dist = 0;
           for (let i = 1; i < slice.length; i++) {
-            const dtHrs = (slice[i].ts - slice[i-1].ts) / 3600000;
-            if (slice[i].ts - slice[i-1].ts > MAX_GAP_MS) hasBspGap = true;
-            dist += ((slice[i].val + slice[i-1].val) / 2) * dtHrs;
+            const dt = slice.ts[i] - slice.ts[i-1];
+            if (dt > MAX_GAP_MS) hasBspGap = true;
+            dist += ((slice.val[i] + slice.val[i-1]) / 2) * (dt / 3600000);
           }
           distanceSailed = Math.max(0, dist);
         } else {
@@ -1821,27 +1940,29 @@ const App = (() => {
     setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
   }
 
+  // Gaussian-smooth a Series. Returns a fresh owned series.
   function smoothSeries(pts, windowMs) {
     if (!windowMs || pts.length < 2) return pts;
     const sigma2 = 2 * (windowMs / 6) * (windowMs / 6);
     const n = pts.length;
-    const result = new Array(n);
+    const out = Series.make(n);
     // Two-pointer sliding window — pts is sorted by ts, so lo/hi only advance
     let lo = 0, hi = 0;
     for (let i = 0; i < n; i++) {
-      const t = pts[i].ts;
-      while (pts[lo].ts < t - windowMs) lo++;
-      while (hi < n && pts[hi].ts <= t + windowMs) hi++;
+      const t = pts.ts[i];
+      out.ts[i] = t;
+      while (pts.ts[lo] < t - windowMs) lo++;
+      while (hi < n && pts.ts[hi] <= t + windowMs) hi++;
       let wSum = 0, vSum = 0;
       for (let j = lo; j < hi; j++) {
-        const dt = pts[j].ts - t;
+        const dt = pts.ts[j] - t;
         const w = Math.exp(-(dt * dt) / sigma2);
         wSum += w;
-        vSum += w * pts[j].val;
+        vSum += w * pts.val[j];
       }
-      result[i] = { ts: t, val: wSum > 0 ? vSum / wSum : pts[i].val };
+      out.val[i] = wSum > 0 ? vSum / wSum : pts.val[i];
     }
-    return result;
+    return out;
   }
 
   function collectGraphData() {
@@ -1864,18 +1985,29 @@ const App = (() => {
           scale: graphScales.get(varName) || { mode: 'auto' },
           boats: [...boats.values()]
             .map(entry => {
-              const raw = sliceSeriesByTs(getFieldSeries(entry, varName) || [], xStart, xEnd);
+              const series = getFieldSeries(entry, varName);
+              const raw = series ? Series.sliceByTs(series, xStart, xEnd) : Series.empty();
               const pts = graphSmooth > 0 ? smoothSeries(raw, graphSmooth * 1000) : raw;
-              const absTackPoints = isAbsTack
-                ? pts.map(p => ({ ts: p.ts, val: Math.abs(p.val), _sign: Math.sign(p.val) }))
-                : null;
+              // absTackPoints: parallel typed-arrays with |val| + sign per point
+              let absTackPoints = null;
+              if (isAbsTack) {
+                const n = pts.length;
+                const absVal = new Float64Array(n);
+                const sign   = new Int8Array(n);
+                for (let i = 0; i < n; i++) {
+                  const v = pts.val[i];
+                  absVal[i] = Math.abs(v);
+                  sign[i]   = v >= 0 ? 1 : -1;
+                }
+                absTackPoints = { ts: pts.ts, val: absVal, sign, length: n };
+              }
               const sourcePts = isAbsTack ? absTackPoints : pts;
               let avg = null, min = null, max = null;
               if (sourcePts.length > 0) {
                 let sum = 0;
-                min = sourcePts[0].val; max = sourcePts[0].val;
+                min = sourcePts.val[0]; max = sourcePts.val[0];
                 for (let i = 0; i < sourcePts.length; i++) {
-                  const v = sourcePts[i].val;
+                  const v = sourcePts.val[i];
                   sum += v;
                   if (v < min) min = v;
                   else if (v > max) max = v;
@@ -2030,6 +2162,8 @@ const App = (() => {
         const name = btn.dataset.name;
         MapManager.removeBoat(name);
         boats.delete(name);
+        tackCache.delete(name);
+        gybeCache.delete(name);
         polarLogState.delete(name);
         rebuildAllFieldNames();
         recalcPlaybackRange();

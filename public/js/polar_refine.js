@@ -14,48 +14,27 @@ const PolarRefine = (() => {
     minBsp:               2,  // kn — drop drift/sail-change periods
   };
 
-  function sliceByTs(series, fromTs, toTs) {
-    let lo = 0, hi = series.length;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (series[m].ts < fromTs) lo = m + 1; else hi = m; }
-    const start = lo;
-    hi = series.length;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (series[m].ts <= toTs) lo = m + 1; else hi = m; }
-    return series.slice(start, lo);
-  }
+  const sliceByTs = Series.sliceByTs;
 
   function meanOf(slice) {
     if (!slice.length) return null;
     let s = 0;
-    for (const p of slice) s += p.val;
+    for (let i = 0; i < slice.length; i++) s += slice.val[i];
     return s / slice.length;
   }
 
   function rangeOf(slice) {
     if (!slice.length) return 0;
-    let mn = slice[0].val, mx = slice[0].val;
-    for (const p of slice) { if (p.val < mn) mn = p.val; if (p.val > mx) mx = p.val; }
+    let mn = slice.val[0], mx = slice.val[0];
+    for (let i = 1; i < slice.length; i++) {
+      const v = slice.val[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
     return mx - mn;
   }
 
-  // Circular mean/range for angles (0..360 or -180..180). Handles wraparound.
-  function circularStats(slice) {
-    if (!slice.length) return { mean: null, range: 0 };
-    let sinSum = 0, cosSum = 0;
-    for (const p of slice) {
-      sinSum += Math.sin(p.val * Math.PI / 180);
-      cosSum += Math.cos(p.val * Math.PI / 180);
-    }
-    const mean = ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
-    let minDev = Infinity, maxDev = -Infinity;
-    for (const p of slice) {
-      let d = p.val - mean;
-      if (d >  180) d -= 360;
-      if (d < -180) d += 360;
-      if (d < minDev) minDev = d;
-      if (d > maxDev) maxDev = d;
-    }
-    return { mean, range: maxDev - minDev };
-  }
+  const circularStats = Series.circularStats;
 
   // Merge and widen manoeuvre intervals. Intervals passed in as [start,end]
   // pairs in ms (typically a tack/gybe is a point event; widening adds the
