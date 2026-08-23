@@ -13,6 +13,9 @@ const Graph = (() => {
   // X-axis tick intervals in seconds
   const X_INTERVALS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
 
+  // Upper bound on x-axis ticks / vertical gridlines, whatever the span.
+  const MAX_X_TICKS = 400;
+
   let canvas = null;
   let offscreen = null; // stored base image (no cursor)
   let _lastData = null;
@@ -239,7 +242,7 @@ const Graph = (() => {
       ctx.lineJoin = 'round';
 
       if (s.absTack && b.absTackPoints) {
-        const pts = b.absTackPoints;
+        const pts = decimate(b.absTackPoints, plotW, xStart, xEnd);
         let i = 0;
         while (i < pts.length) {
           const segSign = pts.sign[i] >= 0 ? 1 : -1;
@@ -259,7 +262,7 @@ const Graph = (() => {
       } else {
         ctx.strokeStyle = b.color;
         ctx.beginPath();
-        const pts = b.points;
+        const pts = decimate(b.points, plotW, xStart, xEnd);
         for (let i = 0; i < pts.length; i++) {
           const px = toX(pts.ts[i]);
           const py = toY(pts.val[i]);
@@ -310,9 +313,17 @@ const Graph = (() => {
 
   function computeXInterval(trimStart, trimEnd) {
     const xSpanS = (trimEnd - trimStart) / 1000;
+    if (!isFinite(xSpanS) || xSpanS <= 0) return null;
     let interval = X_INTERVALS_S[X_INTERVALS_S.length - 1];
     for (const s of X_INTERVALS_S) {
       if (xSpanS / s <= 7) { interval = s; break; }
+    }
+    // Hard ceiling on tick count. The table above tops out at one day, so a span
+    // longer than MAX_X_TICKS days would queue millions of gridline segments into
+    // a single canvas path and exhaust the tab's memory before anything is drawn.
+    // Round the fallback up to whole days so labels stay on day boundaries.
+    if (xSpanS / interval > MAX_X_TICKS) {
+      interval = Math.ceil(xSpanS / MAX_X_TICKS / 86400) * 86400;
     }
     return interval;
   }
@@ -327,6 +338,7 @@ const Graph = (() => {
     ctx.stroke();
 
     // Ticks
+    if (!xInterval) return;
     const firstTick = Math.ceil(xStart / 1000 / xInterval) * xInterval * 1000;
     ctx.fillStyle = LABEL;
     ctx.font = '10px system-ui, sans-serif';
@@ -389,6 +401,53 @@ const Graph = (() => {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
+
+  // Min/max decimation. A 12-day log holds ~1M samples per variable but the plot
+  // is ~1400px wide, so all but ~2 samples per pixel column are drawn on top of
+  // each other. Emitting the column's min and max (in timestamp order) keeps the
+  // trace visually identical — peaks and troughs survive, which plain stride
+  // sampling would drop — while cutting the canvas path by two-plus orders of
+  // magnitude. `sign` is carried through when present so the port/starboard
+  // segmenting in absTack mode still works off the decimated points.
+  function decimate(pts, plotW, xStart, xEnd) {
+    const n = pts.length;
+    const cols = Math.max(1, Math.ceil(plotW));
+    // Two points per column, plus two for the sample landing exactly on xEnd,
+    // which falls outside the last column and so forms a column of its own.
+    const maxPts = cols * 2 + 2;
+    if (n <= maxPts) return pts;
+
+    const span = xEnd - xStart;
+    const ts   = new Float64Array(maxPts);
+    const val  = new Float64Array(maxPts);
+    const sign = pts.sign ? new Int8Array(maxPts) : null;
+    let k = 0;
+
+    let i = 0;
+    while (i < n) {
+      // Advance j to the end of the pixel column that pts[i] falls in.
+      const col = Math.floor((pts.ts[i] - xStart) / span * cols);
+      let j = i;
+      let lo = i, hi = i;
+      while (j < n && Math.floor((pts.ts[j] - xStart) / span * cols) === col) {
+        if (pts.val[j] < pts.val[lo]) lo = j;
+        if (pts.val[j] > pts.val[hi]) hi = j;
+        j++;
+      }
+      // Emit min and max in the order they occur, so the trace stays monotonic in ts.
+      const a = Math.min(lo, hi), b = Math.max(lo, hi);
+      ts[k] = pts.ts[a]; val[k] = pts.val[a]; if (sign) sign[k] = pts.sign[a]; k++;
+      if (b !== a && k < maxPts) {
+        ts[k] = pts.ts[b]; val[k] = pts.val[b]; if (sign) sign[k] = pts.sign[b]; k++;
+      }
+      if (k >= maxPts) break;
+      i = j;
+    }
+
+    const out = { ts: ts.subarray(0, k), val: val.subarray(0, k), length: k };
+    if (sign) out.sign = sign.subarray(0, k);
+    return out;
+  }
 
   // Returns a "nice" scale: step size, nice min, nice max
   function niceScale(dataMin, dataMax, targetTicks) {

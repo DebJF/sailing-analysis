@@ -71,7 +71,7 @@ const PolarRefine = (() => {
    *   data.gybeTs:      array of ms timestamps
    *   data.qualityStart,qualityEnd: ms window for this log
    * @param {object} params  overrides on DEFAULTS
-   * @returns { samples, rejected: { manoeuvre, wind, hdg, bsp, missing }, strideCount }
+   * @returns { samples, rejected: { manoeuvre, wind, hdg, bsp, missing }, strideCount, truncated }
    */
   function generateSamples(data, params = {}) {
     const p = { ...DEFAULTS, ...params };
@@ -91,7 +91,16 @@ const PolarRefine = (() => {
     const start = data.qualityStart + halfW;
     const end   = data.qualityEnd   - halfW;
 
+    // Ceiling on stride iterations. A round-Britain log is ~12 days ≈ 100k strides
+    // at the default 10 s; anything beyond this bound means a corrupt quality
+    // window rather than a real race, and left unguarded the loop would hang the
+    // tab. Truncation is reported so the caller can say so rather than quietly
+    // returning a partial sample set.
+    const MAX_STRIDES = 2e6;
+    let truncated = false;
+
     for (let ts = start; ts <= end; ts += p.stride) {
+      if (strideCount >= MAX_STRIDES) { truncated = true; break; }
       strideCount++;
       const from = ts - halfW, to = ts + halfW;
 
@@ -127,7 +136,7 @@ const PolarRefine = (() => {
       });
     }
 
-    return { samples, rejected, strideCount };
+    return { samples, rejected, strideCount, truncated };
   }
 
   // ── Stage 3: per-cell recommendation ──────────────────────────────────────

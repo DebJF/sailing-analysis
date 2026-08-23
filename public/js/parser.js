@@ -4,9 +4,29 @@ const Parser = (() => {
   const BOAT_COLORS = ['#1e88e5', '#e53935', '#43a047', '#fb8c00', '#8e24aa', '#00acc1'];
   let colorIndex = 0;
 
-  function oleToMs(ole) {
-    return (ole - 25569) * 86400 * 1000;
+  // The Utc column carries one of two encodings, depending on the Expedition
+  // version that wrote the log:
+  //   - OLE Automation date — days since 1899-12-30. ~46000 for 2026.
+  //     Written by Expedition up to 12.6 (no "!log=" header line).
+  //   - Windows FILETIME — 100 ns ticks since 1601-01-01 UTC. ~1.34e17 for 2026.
+  //     Written by Expedition 12.8's "!log=v3" format.
+  // The two ranges sit twelve orders of magnitude apart, so the magnitude of the
+  // value identifies the encoding on its own — no need to trust the header,
+  // which some logs repeat mid-file or omit entirely.
+  const FILETIME_THRESHOLD = 1e15;
+  const FILETIME_EPOCH_MS  = 11644473600000; // 1601-01-01 → 1970-01-01
+
+  function utcToMs(v) {
+    return v >= FILETIME_THRESHOLD
+      ? v / 10000 - FILETIME_EPOCH_MS
+      : (v - 25569) * 86400 * 1000;
   }
+
+  // Reject timestamps no sailing log can legitimately carry. A single corrupt
+  // Utc value would otherwise set minTs/maxTs and stretch every time axis and
+  // stride loop in the app across geological time.
+  const TS_MIN = Date.UTC(1990, 0, 1);
+  const TS_MAX = Date.UTC(2100, 0, 1);
 
   // opts.keepNames: optional Set of field names to retain (drops anything else
   //   before parseFloat). Lat/Lon are always implicitly kept.
@@ -58,6 +78,7 @@ const Parser = (() => {
 
     const rows = [];
     let lastKeptTs = -Infinity;
+    let skippedTs = 0;
 
     for (let i = 2; i < lines.length; i++) {
       const line = lines[i];
@@ -73,10 +94,11 @@ const Parser = (() => {
       const cols = line.split(',');
       if (cols.length < 4) continue;
 
-      const ole = parseFloat(cols[1]);
-      if (isNaN(ole)) continue;
+      const utc = parseFloat(cols[1]);
+      if (isNaN(utc)) continue;
 
-      const ts = oleToMs(ole);
+      const ts = utcToMs(utc);
+      if (ts < TS_MIN || ts > TS_MAX) { skippedTs++; continue; }
 
       if (minSpacingMs > 0) {
         if (ts < lastKeptTs + minSpacingMs) continue;
@@ -128,6 +150,7 @@ const Parser = (() => {
       nameToId,
       rows,
       gpsRows,
+      skippedTs,
       minTs: rows.length ? rows[0].ts : 0,
       maxTs: rows.length ? rows[rows.length - 1].ts : 0,
     };
